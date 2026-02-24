@@ -1,0 +1,64 @@
+# -----------------------------------------------------------------------------
+# Rust-specific files and directories
+# -----------------------------------------------------------------------------
+
+# The 'target' directory is where Cargo puts all compiled artifacts (binaries,
+# libraries, object files, etc.). This should ALWAYS be ignored.
+/target/
+
+# Cargo locks dependencies to specific versions in Cargo.lock. While sometimes
+# checked in for applications, it's typically ignored for libraries.
+# If you are building an *application* (and not a library), you might want to
+# uncomment the next line to **keep** the lock file:
+Cargo.lock
+
+# -----------------------------------------------------------------------------
+# Operating System and Editor Temporary Files
+# -----------------------------------------------------------------------------
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Visual Studio Code (VS Code) settings and workspace files
+.vscode/
+# VS Code remote development files
+.devcontainer/
+
+# IntelliJ/RustRover/CLion/etc. (JetBrains IDEs)
+.idea/
+
+# Vim/NeoVim
+*~
+# Swap files
+*.swp
+# Persistent undo
+*.un~
+
+# Emacs
+# Lock files
+\#*\#
+
+# -----------------------------------------------------------------------------
+# Testing and Benchmarking Caches
+# -----------------------------------------------------------------------------
+
+# Ignore generated documentation files
+/doc/
+
+# Ignore profiling data from tools like callgrind or kcachegrind
+/cachegrind.out.*
+
+# -----------------------------------------------------------------------------
+# General Build/Dependency Artifacts
+# -----------------------------------------------------------------------------
+
+# Hidden files that may contain local configuration or secrets
+.env
+.env.local
+.secrets
+
+config/local.yaml
+*.local.yaml

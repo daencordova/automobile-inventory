@@ -1,0 +1,41 @@
+app:
+  name: "automobile-inventory"
+  version: "0.3.0"
+
+server:
+  port: 3000
+  host: "0.0.0.0"
+  request_timeout_seconds: 30
+  shutdown_timeout_seconds: 30
+
+database:
+  max_connections: 50
+  min_connections: 5
+  acquire_timeout_seconds: 10
+  max_lifetime_seconds: 1800
+  idle_timeout_seconds: 600
+
+  health_check_timeout_seconds: 2
+  health_check_acquire_timeout_ms: 200
+
+cors:
+  allowed_origins: "https://app.tuempresa.com,https://admin.tuempresa.com"
+  allow_credentials: true
+  max_age_seconds: 3600
+  allowed_methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - PATCH
+    - OPTIONS
+
+observability:
+  log_level: "info"
+  enable_metrics: true
+  enable_tracing: true
+  otel_endpoint: "https://otel.tuobservabilidad.com:4317"
+
+features:
+  enable_caching: true
+  enable_rate_limiting: true
