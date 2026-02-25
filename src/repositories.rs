@@ -781,83 +781,92 @@ impl WarehouseRepository for PgWarehouseRepository {
             return Err(TransferError::DestinationWarehouseNotFound(to.to_string()));
         }
 
-        let source_stock: Option<(i32, i32)> = sqlx::query_as(
+        let transfer_result = sqlx::query_as::<_, TransferOrder>(
             r#"
-                SELECT quantity, reserved_quantity
-                FROM stock_locations
-                WHERE warehouse_id = $1 AND car_id = $2
-                FOR UPDATE
+                WITH source_stock AS (
+                    SELECT quantity, reserved_quantity
+                    FROM stock_locations
+                    WHERE warehouse_id = $1 AND car_id = $2
+                    FOR UPDATE
+                ),
+                validation AS (
+                    SELECT
+                        CASE
+                            WHEN (quantity - reserved_quantity) >= $3 THEN true
+                            ELSE false
+                        END as has_sufficient_stock,
+                        quantity - reserved_quantity as available_qty
+                    FROM source_stock
+                ),
+                create_transfer AS (
+                    INSERT INTO transfer_orders (
+                        transfer_id, from_warehouse_id, to_warehouse_id,
+                        car_id, quantity, status, requested_at
+                    )
+                    SELECT $4, $1, $5, $2, $3, 'InTransit', NOW()
+                    FROM validation
+                    WHERE has_sufficient_stock = true
+                    RETURNING *
+                ),
+                update_source AS (
+                    UPDATE stock_locations
+                    SET
+                        quantity = quantity - $3,
+                        last_updated = NOW()
+                    WHERE warehouse_id = $1
+                      AND car_id = $2
+                      AND EXISTS (SELECT 1 FROM create_transfer)
+                    RETURNING warehouse_id
+                ),
+                upsert_destination AS (
+                    INSERT INTO stock_locations (
+                        warehouse_id, car_id, zone, quantity,
+                        reserved_quantity, last_updated
+                    )
+                    SELECT $5, $2, 'RECEIVING', $3, 0, NOW()
+                    FROM create_transfer
+                    ON CONFLICT (warehouse_id, car_id)
+                    DO UPDATE SET
+                        quantity = stock_locations.quantity + EXCLUDED.quantity,
+                        last_updated = NOW()
+                    RETURNING warehouse_id
+                )
+                SELECT * FROM create_transfer
                 "#,
         )
         .bind(from)
         .bind(car_id)
+        .bind(quantity)
+        .bind(Uuid::new_v4())
+        .bind(to)
         .fetch_optional(&mut *tx)
         .await?;
 
-        let (current_qty, reserved_qty) = source_stock.unwrap_or((0, 0));
-        let available = current_qty - reserved_qty;
+        let transfer = match transfer_result {
+            Some(t) => t,
+            None => {
+                let available: Option<(i32,)> = sqlx::query_as(
+                    r#"
+                        SELECT COALESCE(quantity - reserved_quantity, 0)
+                        FROM stock_locations
+                        WHERE warehouse_id = $1 AND car_id = $2
+                        "#,
+                )
+                .bind(from)
+                .bind(car_id)
+                .fetch_optional(&mut *tx)
+                .await?;
 
-        if available < quantity {
-            return Err(TransferError::InsufficientStock {
-                available,
-                requested: quantity,
-            });
-        }
+                let available_qty = available.map(|a| a.0).unwrap_or(0);
 
-        let transfer = sqlx::query_as::<_, TransferOrder>(
-                r#"
-                INSERT INTO transfer_orders
-                    (transfer_id, from_warehouse_id, to_warehouse_id, car_id, quantity, status, requested_at)
-                VALUES ($1, $2, $3, $4, $5, 'InTransit', NOW())
-                RETURNING *
-                "#
-            )
-            .bind(Uuid::new_v4())
-            .bind(from)
-            .bind(to)
-            .bind(car_id)
-            .bind(quantity)
-            .fetch_one(&mut *tx)
-            .await?;
+                tx.rollback().await?;
 
-        let updated_rows = sqlx::query(
-            r#"
-                UPDATE stock_locations
-                SET quantity = quantity - $1, last_updated = NOW()
-                WHERE warehouse_id = $2 AND car_id = $3 AND quantity - reserved_quantity >= $1
-                "#,
-        )
-        .bind(quantity)
-        .bind(from)
-        .bind(car_id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-
-        if updated_rows == 0 {
-            tx.rollback().await?;
-            return Err(TransferError::InsufficientStock {
-                available,
-                requested: quantity,
-            });
-        }
-
-        sqlx::query(
-            r#"
-                INSERT INTO stock_locations
-                    (warehouse_id, car_id, zone, quantity, reserved_quantity, last_updated)
-                VALUES ($1, $2, 'TRANSIT', $3, 0, NOW())
-                ON CONFLICT (warehouse_id, car_id)
-                DO UPDATE SET
-                    quantity = stock_locations.quantity + EXCLUDED.quantity,
-                    last_updated = NOW()
-                "#,
-        )
-        .bind(to)
-        .bind(car_id)
-        .bind(quantity)
-        .execute(&mut *tx)
-        .await?;
+                return Err(TransferError::InsufficientStock {
+                    available: available_qty,
+                    requested: quantity,
+                });
+            }
+        };
 
         tx.commit().await?;
 
