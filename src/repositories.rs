@@ -4,10 +4,11 @@ use sqlx::{PgPool, Result as SqlxResult};
 use tracing::error;
 use uuid::Uuid;
 
+use crate::error::ReservationError;
 use crate::models::{
-    CarEntity, CarFilter, CarId, CarUpdateData, CreateCarDto, InventoryMetrics,
-    InventoryStatusStat, PaginationParams, Reservation, SalesVelocity, StockAlertRow,
-    StockLocation, TransferOrder, Warehouse, WarehouseId,
+    CarEntity, CarFilter, CarId, CarUpdateData, CreateCarDto, CreateReservationDto,
+    InventoryMetrics, InventoryStatusStat, PaginationParams, Reservation, SalesVelocity,
+    StockAlertRow, StockLocation, TransferOrder, Warehouse, WarehouseId,
 };
 
 #[async_trait]
@@ -336,6 +337,27 @@ pub trait ReservationRepository: Send + Sync {
     async fn find_reservation_by_id(&self, id: Uuid) -> Result<Option<Reservation>, sqlx::Error>;
     async fn confirm_reservation(&self, id: Uuid) -> Result<Reservation, sqlx::Error>;
     async fn cancel_reservation(&self, id: Uuid, reason: Option<&str>) -> Result<(), sqlx::Error>;
+    async fn get_available_stock_with_lock(
+        &self,
+        car_id: &CarId,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(i32, i64), sqlx::Error>;
+
+    async fn create_reservation_in_tx(
+        &self,
+        car_id: &CarId,
+        quantity: i32,
+        reserved_by: &str,
+        ttl_minutes: i32,
+        metadata: Option<serde_json::Value>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<Reservation, sqlx::Error>;
+
+    async fn execute_reservation_atomic(
+        &self,
+        car_id: CarId,
+        dto: CreateReservationDto,
+    ) -> Result<Reservation, ReservationError>;
 }
 
 pub struct PgReservationRepository {
@@ -423,6 +445,113 @@ impl ReservationRepository for PgReservationRepository {
             return Err(sqlx::Error::RowNotFound);
         }
         Ok(())
+    }
+
+    async fn get_available_stock_with_lock(
+        &self,
+        car_id: &CarId,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(i32, i64), sqlx::Error> {
+        let car_row: Option<(i32,)> = sqlx::query_as(
+            r#"
+                SELECT quantity_in_stock
+                FROM cars
+                WHERE car_id = $1 AND deleted_at IS NULL
+                FOR UPDATE
+                "#,
+        )
+        .bind(car_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        let total_stock = car_row.ok_or(sqlx::Error::RowNotFound)?.0;
+
+        let reserved: Option<(i64,)> = sqlx::query_as(
+            r#"
+                SELECT COALESCE(SUM(quantity), 0)
+                FROM reservations
+                WHERE car_id = $1 AND status = 'Pending' AND expires_at > NOW()
+                "#,
+        )
+        .bind(car_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        let reserved_qty = reserved.map(|r| r.0).unwrap_or(0);
+
+        Ok((total_stock, reserved_qty))
+    }
+
+    async fn create_reservation_in_tx(
+        &self,
+        car_id: &CarId,
+        quantity: i32,
+        reserved_by: &str,
+        ttl_minutes: i32,
+        metadata: Option<serde_json::Value>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<Reservation, sqlx::Error> {
+        sqlx::query_as::<_, Reservation>(
+                r#"
+                INSERT INTO reservations (id, car_id, quantity, reserved_by, expires_at, status, metadata, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 minute' * $5, 'Pending', $6, NOW(), NOW())
+                RETURNING *
+                "#
+            )
+            .bind(Uuid::new_v4())
+            .bind(car_id)
+            .bind(quantity)
+            .bind(reserved_by)
+            .bind(ttl_minutes as f64)
+            .bind(metadata)
+            .fetch_one(&mut **tx)
+            .await
+    }
+
+    async fn execute_reservation_atomic(
+        &self,
+        car_id: CarId,
+        dto: CreateReservationDto,
+    ) -> Result<Reservation, ReservationError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(ReservationError::Database)?;
+
+        let (total_stock, reserved) = self
+            .get_available_stock_with_lock(&car_id, &mut tx)
+            .await
+            .map_err(|e| match e {
+                sqlx::Error::RowNotFound => ReservationError::CarNotFound,
+                e => ReservationError::Database(e),
+            })?;
+
+        let available = total_stock - reserved as i32;
+
+        if available < dto.quantity {
+            tx.rollback().await.map_err(ReservationError::Database)?;
+            return Err(ReservationError::InsufficientStock {
+                requested: dto.quantity,
+                available,
+            });
+        }
+
+        let reservation = self
+            .create_reservation_in_tx(
+                &car_id,
+                dto.quantity,
+                &dto.reserved_by,
+                dto.ttl_minutes,
+                dto.metadata,
+                &mut tx,
+            )
+            .await
+            .map_err(ReservationError::Database)?;
+
+        tx.commit().await.map_err(ReservationError::Database)?;
+
+        Ok(reservation)
     }
 }
 

@@ -66,7 +66,7 @@ async fn main() -> Result<(), AppError> {
     let analytics_repo = Arc::new(PgInventoryAnalyticsRepository::new(pool.clone()));
 
     let car_service = CarService::new(car_repo.clone());
-    let reservation_service = Arc::new(ReservationService::new(reservation_repo, car_repo.clone()));
+    let reservation_service = Arc::new(ReservationService::new(reservation_repo));
     let warehouse_service = Arc::new(WarehouseService::new(warehouse_repo));
     let inventory_analytics_service = Arc::new(InventoryAnalyticsService::new(analytics_repo));
 

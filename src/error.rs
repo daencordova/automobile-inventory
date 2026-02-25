@@ -98,6 +98,18 @@ pub enum AppError {
     BackgroundJobError(String),
 }
 
+#[derive(Debug, Error)]
+pub enum ReservationError {
+    #[error("Insufficient stock: requested {requested}, available {available}")]
+    InsufficientStock { requested: i32, available: i32 },
+
+    #[error("Car not found")]
+    CarNotFound,
+
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
+}
+
 impl AppError {
     pub fn with_context(self, context: impl Into<String>) -> Self {
         Self::WithContext {

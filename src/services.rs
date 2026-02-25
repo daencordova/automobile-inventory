@@ -9,7 +9,7 @@ use tracing::{info, instrument};
 use uuid::Uuid;
 
 use crate::config::DatabaseConfig;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ReservationError};
 use crate::models::{
     AlertLevel, CarId, CarResponse, CarSearchQuery, CarUpdateData, CreateCarDto,
     CreateReservationDto, DashboardStats, HealthStatus, InventoryAlertSummary, InventoryMetrics,
@@ -209,18 +209,11 @@ impl CarService {
 
 pub struct ReservationService {
     reservation_repo: Arc<dyn ReservationRepository>,
-    car_repo: Arc<dyn CarRepository>,
 }
 
 impl ReservationService {
-    pub fn new(
-        reservation_repo: Arc<dyn ReservationRepository>,
-        car_repo: Arc<dyn CarRepository>,
-    ) -> Self {
-        Self {
-            reservation_repo,
-            car_repo,
-        }
+    pub fn new(reservation_repo: Arc<dyn ReservationRepository>) -> Self {
+        Self { reservation_repo }
     }
 
     #[instrument(skip(self))]
@@ -229,44 +222,25 @@ impl ReservationService {
         car_id: CarId,
         dto: CreateReservationDto,
     ) -> AppResult<ReservationResponse> {
-        let car = self
-            .car_repo
-            .find_by_id(car_id.clone())
-            .await?
-            .ok_or(AppError::NotFound)?;
-
-        let total_stock = car.quantity_in_stock;
-        let reserved = self
-            .reservation_repo
-            .get_reserved_quantity_for_car(&car_id)
-            .await
-            .map_err(AppError::DatabaseError)?;
-        let available = total_stock - reserved as i32;
-
-        if available < dto.quantity {
-            return Err(AppError::InsufficientStock {
-                requested: dto.quantity as u32,
-                available: available.max(0) as u32,
-            });
-        }
-
         let reservation = self
             .reservation_repo
-            .create_reservation(
-                &car_id,
-                dto.quantity,
-                &dto.reserved_by,
-                dto.ttl_minutes,
-                dto.metadata,
-            )
+            .execute_reservation_atomic(car_id, dto)
             .await
-            .map_err(AppError::DatabaseError)?;
+            .map_err(|e| match e {
+                ReservationError::InsufficientStock {
+                    requested,
+                    available,
+                } => AppError::InsufficientStock {
+                    requested: requested as u32,
+                    available: available.max(0) as u32,
+                },
+                ReservationError::CarNotFound => AppError::NotFound,
+                ReservationError::Database(e) => AppError::DatabaseError(e),
+            })?;
 
         info!(
             reservation_id = %reservation.id,
-            car_id = %car_id,
-            quantity = dto.quantity,
-            "Reservation created"
+            "Atomic reservation created successfully"
         );
 
         Ok(ReservationResponse::from(reservation))
