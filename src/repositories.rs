@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use bigdecimal::{BigDecimal, FromPrimitive};
-use sqlx::{PgPool, Result as SqlxResult};
+use sqlx::{PgPool, QueryBuilder, Result as SqlxResult};
 use tracing::error;
 use uuid::Uuid;
 
@@ -109,6 +109,31 @@ impl CarRepository for PgCarRepository {
     ) -> SqlxResult<(Vec<CarEntity>, i64)> {
         let (limit, offset, _, _) = pagination.normalize();
 
+        let mut builder = QueryBuilder::new(
+            r#"SELECT
+                    car_id, brand, model, year, color, engine_type,
+                    transmission, price, quantity_in_stock, status,
+                    created_at, updated_at, deleted_at,
+                    COUNT(*) OVER() as total_count
+                FROM cars
+                WHERE deleted_at IS NULL"#,
+        );
+
+        if let Some(brand) = &filter.brand {
+            builder.push(" AND brand = ");
+            builder.push_bind(brand);
+        }
+
+        if let Some(status) = &filter.status {
+            builder.push(" AND status = ");
+            builder.push_bind(status);
+        }
+
+        builder.push(" ORDER BY car_id ASC LIMIT ");
+        builder.push_bind(limit);
+        builder.push(" OFFSET ");
+        builder.push_bind(offset);
+
         #[derive(sqlx::FromRow)]
         struct CarRow {
             #[sqlx(flatten)]
@@ -116,26 +141,10 @@ impl CarRepository for PgCarRepository {
             total_count: i64,
         }
 
-        let rows = sqlx::query_as::<_, CarRow>(
-            r#"
-            SELECT
-                car_id, brand, model, year, color, engine_type, transmission, price,
-                quantity_in_stock, status, created_at, updated_at, deleted_at,
-                COUNT(*) OVER() as total_count
-            FROM cars
-            WHERE ($1::text IS NULL OR brand = $1)
-                AND ($2::text IS NULL OR status = $2::text::car_status)
-                AND deleted_at IS NULL
-            ORDER BY car_id ASC
-            LIMIT $3 OFFSET $4
-            "#,
-        )
-        .bind(&filter.brand)
-        .bind(&filter.status)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = builder
+            .build_query_as::<CarRow>()
+            .fetch_all(&self.pool)
+            .await?;
 
         let total = rows.first().map(|r| r.total_count).unwrap_or(0);
         let cars = rows.into_iter().map(|r| r.car).collect();
