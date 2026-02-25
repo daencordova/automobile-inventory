@@ -24,6 +24,60 @@ impl std::fmt::Display for ErrorId {
     }
 }
 
+#[derive(serde::Serialize)]
+struct ErrorResponseBody {
+    error: ErrorPayload,
+}
+
+#[derive(serde::Serialize)]
+struct ErrorPayload {
+    code: String,
+    message: String,
+    error_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    documentation: Option<String>,
+    timestamp: String,
+}
+
+#[derive(Debug, Error)]
+pub enum ReservationError {
+    #[error("Insufficient stock: requested {requested}, available {available}")]
+    InsufficientStock { requested: i32, available: i32 },
+
+    #[error("Car not found")]
+    CarNotFound,
+
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum TransferError {
+    #[error(
+        "Source warehouse has insufficient stock: available {available}, requested {requested}"
+    )]
+    InsufficientStock { available: i32, requested: i32 },
+
+    #[error("Source warehouse not found: {0}")]
+    SourceWarehouseNotFound(String),
+
+    #[error("Destination warehouse not found: {0}")]
+    DestinationWarehouseNotFound(String),
+
+    #[error("Transfer not found: {0}")]
+    TransferNotFound(Uuid),
+
+    #[error("Invalid transfer state: expected {expected}, found {found}")]
+    InvalidState { expected: String, found: String },
+
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
+}
+
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("Database error: {0}")]
@@ -62,14 +116,6 @@ pub enum AppError {
     #[error("Feature not yet implemented")]
     NotImplemented,
 
-    #[error("Context: {context}")]
-    WithContext {
-        #[source]
-        source: Box<AppError>,
-        context: String,
-        error_id: ErrorId,
-    },
-
     #[error("Insufficient stock: requested {requested}, available {available}")]
     InsufficientStock { requested: u32, available: u32 },
 
@@ -96,18 +142,17 @@ pub enum AppError {
 
     #[error("Background job failed: {0}")]
     BackgroundJobError(String),
-}
 
-#[derive(Debug, Error)]
-pub enum ReservationError {
-    #[error("Insufficient stock: requested {requested}, available {available}")]
-    InsufficientStock { requested: i32, available: i32 },
+    #[error("Transfer error: {0}")]
+    TransferError(#[from] TransferError),
 
-    #[error("Car not found")]
-    CarNotFound,
-
-    #[error("Database error: {0}")]
-    Database(#[from] sqlx::Error),
+    #[error("Context: {context}")]
+    WithContext {
+        #[source]
+        source: Box<AppError>,
+        context: String,
+        error_id: ErrorId,
+    },
 }
 
 impl AppError {
@@ -140,7 +185,6 @@ impl AppError {
             Self::DatabaseError(_) => "DATABASE_ERROR".to_string(),
             Self::MigrationError(_) => "MIGRATION_ERROR".to_string(),
             Self::ConfigError(_) => "CONFIGURATION_ERROR".to_string(),
-            Self::WithContext { source, .. } => source.error_code(),
             Self::InsufficientStock { .. } => "INSUFFICIENT_STOCK".to_string(),
             Self::ReservationNotFound => "RESERVATION_NOT_FOUND".to_string(),
             Self::ReservationExpired => "RESERVATION_EXPIRED".to_string(),
@@ -150,6 +194,19 @@ impl AppError {
             Self::TransferNotFound(_) => "TRANSFER_NOT_FOUND".to_string(),
             Self::BusinessRuleViolation(_) => "BUSINESS_RULE_VIOLATION".to_string(),
             Self::BackgroundJobError(_) => "BACKGROUND_JOB_ERROR".to_string(),
+            Self::TransferError(e) => match e {
+                TransferError::InsufficientStock { .. } => "INSUFFICIENT_STOCK".to_string(),
+                TransferError::SourceWarehouseNotFound(_) => {
+                    "SOURCE_WAREHOUSE_NOT_FOUND".to_string()
+                }
+                TransferError::DestinationWarehouseNotFound(_) => {
+                    "DESTINATION_WAREHOUSE_NOT_FOUND".to_string()
+                }
+                TransferError::TransferNotFound(_) => "TRANSFER_NOT_FOUND".to_string(),
+                TransferError::InvalidState { .. } => "INVALID_TRANSFER_STATE".to_string(),
+                TransferError::Database(_) => "DATABASE_ERROR".to_string(),
+            },
+            Self::WithContext { source, .. } => source.error_code(),
         }
     }
 
@@ -173,7 +230,6 @@ impl AppError {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-            Self::WithContext { source, .. } => source.status_code(),
             Self::InsufficientStock { .. } => StatusCode::CONFLICT,
             Self::ReservationNotFound => StatusCode::NOT_FOUND,
             Self::ReservationExpired => StatusCode::GONE,
@@ -183,6 +239,15 @@ impl AppError {
             Self::TransferNotFound(_) => StatusCode::NOT_FOUND,
             Self::BusinessRuleViolation(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::BackgroundJobError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::TransferError(e) => match e {
+                TransferError::InsufficientStock { .. } => StatusCode::CONFLICT,
+                TransferError::SourceWarehouseNotFound(_) => StatusCode::NOT_FOUND,
+                TransferError::DestinationWarehouseNotFound(_) => StatusCode::NOT_FOUND,
+                TransferError::TransferNotFound(_) => StatusCode::NOT_FOUND,
+                TransferError::InvalidState { .. } => StatusCode::CONFLICT,
+                TransferError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            },
+            Self::WithContext { source, .. } => source.status_code(),
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -228,25 +293,6 @@ impl AppError {
             _ => AppError::DatabaseError(e),
         }
     }
-}
-
-#[derive(serde::Serialize)]
-struct ErrorResponseBody {
-    error: ErrorPayload,
-}
-
-#[derive(serde::Serialize)]
-struct ErrorPayload {
-    code: String,
-    message: String,
-    error_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    details: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    documentation: Option<String>,
-    timestamp: String,
 }
 
 impl IntoResponse for AppError {

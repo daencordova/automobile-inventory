@@ -426,12 +426,59 @@ impl WarehouseService {
         Self { warehouse_repo }
     }
 
+    pub async fn create_warehouse(
+        &self,
+        id: String,
+        name: String,
+        location: String,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+        capacity_total: i32,
+    ) -> AppResult<Warehouse> {
+        let warehouse_id =
+            WarehouseId::new(id).map_err(|e| AppError::ConfigError(e.to_string()))?;
+
+        if capacity_total <= 0 {
+            return Err(AppError::ValidationError(validator::ValidationErrors::new()));
+        }
+
+        let warehouse = self
+            .warehouse_repo
+            .create_warehouse(
+                warehouse_id,
+                name,
+                location,
+                latitude,
+                longitude,
+                capacity_total,
+            )
+            .await
+            .map_err(|e| match e {
+                sqlx::Error::Database(db_err) => {
+                    if db_err.code().as_deref() == Some("23505") {
+                        AppError::AlreadyExists("Warehouse".to_string())
+                    } else {
+                        AppError::DatabaseError(sqlx::Error::Database(db_err))
+                    }
+                }
+                _ => AppError::DatabaseError(e),
+            })?;
+
+        info!(
+            warehouse_id = %warehouse.warehouse_id,
+            name = %warehouse.name,
+            "Warehouse created successfully"
+        );
+
+        Ok(warehouse)
+    }
+
     pub async fn get_warehouse(&self, id: WarehouseId) -> AppResult<Warehouse> {
         self.warehouse_repo
             .find_warehouse_by_id(&id)
             .await
             .map_err(AppError::DatabaseError)?
-            .ok_or(AppError::WarehouseNotFound(id.to_string()))
+            .ok_or_else(|| AppError::WarehouseNotFound(id.to_string()))
     }
 
     pub async fn list_warehouses(&self) -> AppResult<Vec<Warehouse>> {
@@ -453,10 +500,39 @@ impl WarehouseService {
             ));
         }
 
-        self.get_warehouse(from_id.clone()).await?;
-        self.get_warehouse(to_id.clone()).await?;
+        let transfer = self
+            .warehouse_repo
+            .execute_transfer(&from_id, &to_id, &CarId::new(dto.car_id)?, dto.quantity)
+            .await?;
 
-        Err(AppError::NotImplemented)
+        info!(
+            transfer_id = %transfer.transfer_id,
+            from = %from_id,
+            to = %to_id,
+            quantity = dto.quantity,
+            "Stock transfer executed successfully"
+        );
+
+        Ok(transfer)
+    }
+
+    pub async fn complete_transfer(&self, transfer_id: Uuid) -> AppResult<TransferOrder> {
+        let transfer = self.warehouse_repo.complete_transfer(transfer_id).await?;
+
+        info!(
+            transfer_id = %transfer.transfer_id,
+            "Transfer marked as completed"
+        );
+
+        Ok(transfer)
+    }
+
+    pub async fn get_transfer(&self, transfer_id: Uuid) -> AppResult<TransferOrder> {
+        self.warehouse_repo
+            .find_transfer_by_id(transfer_id)
+            .await
+            .map_err(AppError::DatabaseError)?
+            .ok_or_else(|| AppError::TransferNotFound(transfer_id).into())
     }
 }
 

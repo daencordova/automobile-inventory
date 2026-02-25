@@ -11,10 +11,10 @@ use crate::error::{AppError, AppResult};
 use crate::extractors::ValidatedJson;
 use crate::middleware::extract_context;
 use crate::models::{
-    Car, CarId, CarResponse, CarSearchQuery, CreateCarDto, CreateReservationDto, DashboardStats,
-    HealthResponse, HealthStatus, InventoryAlertSummary, InventoryMetrics, PaginatedResponse,
-    ReservationResponse, SalesVelocity, StockTransferDto, TransferOrder, UpdateCarDto, Warehouse,
-    WarehouseId,
+    Car, CarId, CarResponse, CarSearchQuery, CreateCarDto, CreateReservationDto,
+    CreateWarehouseDto, DashboardStats, HealthResponse, HealthStatus, InventoryAlertSummary,
+    InventoryMetrics, PaginatedResponse, ReservationResponse, SalesVelocity, StockTransferDto,
+    TransferOrder, UpdateCarDto, Warehouse, WarehouseId,
 };
 use crate::state::AppState;
 
@@ -346,6 +346,37 @@ pub async fn cancel_reservation_handler(
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/v1/warehouses",
+    request_body = CreateWarehouseDto,
+    responses(
+        (status = 201, description = "Warehouse created successfully", body = Warehouse),
+        (status = 400, description = "Validation error"),
+        (status = 409, description = "Warehouse ID already exists"),
+        (status = 422, description = "Invalid warehouse ID format")
+    ),
+    tag = "Warehouses"
+)]
+pub async fn create_warehouse_handler(
+    State(state): State<AppState>,
+    ValidatedJson(dto): ValidatedJson<CreateWarehouseDto>,
+) -> AppResult<impl IntoResponse> {
+    let warehouse = state
+        .warehouse_service
+        .create_warehouse(
+            dto.warehouse_id,
+            dto.name,
+            dto.location,
+            dto.latitude,
+            dto.longitude,
+            dto.capacity_total,
+        )
+        .await?;
+
+    Ok((StatusCode::CREATED, Json(warehouse)))
+}
+
+#[utoipa::path(
     get,
     path = "/api/v1/warehouses",
     responses(
@@ -386,9 +417,11 @@ pub async fn get_warehouse_handler(
     path = "/api/v1/warehouses/transfers",
     request_body = StockTransferDto,
     responses(
-        (status = 201, description = "Transfer created", body = TransferOrder),
-        (status = 400, description = "Invalid transfer"),
-        (status = 409, description = "Insufficient stock in source")
+        (status = 201, description = "Transfer created and stock moved", body = TransferOrder),
+        (status = 400, description = "Invalid warehouse IDs or same source/destination"),
+        (status = 404, description = "Source or destination warehouse not found"),
+        (status = 409, description = "Insufficient stock in source warehouse"),
+        (status = 422, description = "Validation error")
     ),
     tag = "Warehouses"
 )]
@@ -398,6 +431,50 @@ pub async fn create_transfer_handler(
 ) -> AppResult<impl IntoResponse> {
     let transfer = state.warehouse_service.transfer_stock(dto).await?;
     Ok((StatusCode::CREATED, Json(transfer)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/warehouses/transfers/{id}/complete",
+    params(
+        ("id" = Uuid, Path, description = "Transfer ID")
+    ),
+    responses(
+        (status = 200, description = "Transfer completed successfully", body = TransferOrder),
+        (status = 404, description = "Transfer not found"),
+        (status = 409, description = "Transfer not in InTransit state")
+    ),
+    tag = "Warehouses"
+)]
+pub async fn complete_transfer_handler(
+    State(state): State<AppState>,
+    Path(transfer_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let transfer = state
+        .warehouse_service
+        .complete_transfer(transfer_id)
+        .await?;
+    Ok(Json(transfer))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/warehouses/transfers/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Transfer ID")
+    ),
+    responses(
+        (status = 200, description = "Transfer found", body = TransferOrder),
+        (status = 404, description = "Transfer not found")
+    ),
+    tag = "Warehouses"
+)]
+pub async fn get_transfer_handler(
+    State(state): State<AppState>,
+    Path(transfer_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let transfer = state.warehouse_service.get_transfer(transfer_id).await?;
+    Ok(Json(transfer))
 }
 
 #[utoipa::path(

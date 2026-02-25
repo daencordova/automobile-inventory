@@ -483,12 +483,38 @@ pub struct Warehouse {
     pub warehouse_id: WarehouseId,
     pub name: String,
     pub location: String,
-    pub latitude: Option<f64>,
-    pub longitude: Option<f64>,
+
+    #[schema(value_type = f64, example = 40.7282)]
+    pub latitude: Option<BigDecimal>,
+
+    #[schema(value_type = f64, example = -74.0776)]
+    pub longitude: Option<BigDecimal>,
+
     pub capacity_total: i32,
     pub capacity_used: i32,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct CreateWarehouseDto {
+    #[validate(length(min = 4, max = 20))]
+    pub warehouse_id: String,
+
+    #[validate(length(min = 3, max = 100))]
+    pub name: String,
+
+    #[validate(length(min = 3, max = 200))]
+    pub location: String,
+
+    #[validate(range(min = -90.0, max = 90.0))]
+    pub latitude: Option<f64>,
+
+    #[validate(range(min = -180.0, max = 180.0))]
+    pub longitude: Option<f64>,
+
+    #[validate(range(min = 1))]
+    pub capacity_total: i32,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, ToSchema)]
@@ -525,6 +551,9 @@ pub struct StockTransferDto {
 
     #[validate(length(min = 1))]
     pub to_warehouse_id: String,
+
+    #[validate(length(min = 1))]
+    pub car_id: String,
 
     #[validate(range(min = 1))]
     pub quantity: i32,

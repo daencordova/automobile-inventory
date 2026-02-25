@@ -1,14 +1,14 @@
 use async_trait::async_trait;
-use bigdecimal::BigDecimal;
+use bigdecimal::{BigDecimal, FromPrimitive};
 use sqlx::{PgPool, Result as SqlxResult};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::error::ReservationError;
+use crate::error::{ReservationError, TransferError};
 use crate::models::{
     CarEntity, CarFilter, CarId, CarUpdateData, CreateCarDto, CreateReservationDto,
     InventoryMetrics, InventoryStatusStat, PaginationParams, Reservation, SalesVelocity,
-    StockAlertRow, StockLocation, TransferOrder, Warehouse, WarehouseId,
+    StockAlertRow, StockLocation, TransferOrder, TransferStatus, Warehouse, WarehouseId,
 };
 
 #[async_trait]
@@ -580,11 +580,23 @@ impl HealthCheckRepository for PgHealthCheckRepository {
 
 #[async_trait]
 pub trait WarehouseRepository: Send + Sync {
+    async fn create_warehouse(
+        &self,
+        id: WarehouseId,
+        name: String,
+        location: String,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+        capacity_total: i32,
+    ) -> Result<Warehouse, sqlx::Error>;
+
     async fn list_warehouses(&self) -> Result<Vec<Warehouse>, sqlx::Error>;
+
     async fn find_warehouse_by_id(
         &self,
         id: &WarehouseId,
     ) -> Result<Option<Warehouse>, sqlx::Error>;
+
     async fn transfer_stock(
         &self,
         from: &WarehouseId,
@@ -592,6 +604,21 @@ pub trait WarehouseRepository: Send + Sync {
         car_id: &CarId,
         quantity: i32,
     ) -> Result<TransferOrder, sqlx::Error>;
+
+    async fn execute_transfer(
+        &self,
+        from: &WarehouseId,
+        to: &WarehouseId,
+        car_id: &CarId,
+        quantity: i32,
+    ) -> Result<TransferOrder, TransferError>;
+
+    async fn complete_transfer(&self, transfer_id: Uuid) -> Result<TransferOrder, TransferError>;
+
+    async fn find_transfer_by_id(
+        &self,
+        transfer_id: Uuid,
+    ) -> Result<Option<TransferOrder>, sqlx::Error>;
 }
 
 pub struct PgWarehouseRepository {
@@ -606,6 +633,41 @@ impl PgWarehouseRepository {
 
 #[async_trait]
 impl WarehouseRepository for PgWarehouseRepository {
+    async fn create_warehouse(
+        &self,
+        id: WarehouseId,
+        name: String,
+        location: String,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+        capacity_total: i32,
+    ) -> Result<Warehouse, sqlx::Error> {
+        sqlx::query_as::<_, Warehouse>(
+            r#"
+                INSERT INTO warehouses (
+                    warehouse_id,
+                    name,
+                    location,
+                    latitude,
+                    longitude,
+                    capacity_total,
+                    capacity_used,
+                    is_active
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, 0, true)
+                RETURNING *
+                "#,
+        )
+        .bind(&id)
+        .bind(name)
+        .bind(location)
+        .bind(latitude.map(BigDecimal::from_f64).flatten())
+        .bind(longitude.map(BigDecimal::from_f64).flatten())
+        .bind(capacity_total)
+        .fetch_one(&self.pool)
+        .await
+    }
+
     async fn list_warehouses(&self) -> Result<Vec<Warehouse>, sqlx::Error> {
         sqlx::query_as::<_, Warehouse>(
             "SELECT * FROM warehouses WHERE is_active = true ORDER BY name",
@@ -677,6 +739,165 @@ impl WarehouseRepository for PgWarehouseRepository {
 
         tx.commit().await?;
         Ok(transfer)
+    }
+
+    async fn execute_transfer(
+        &self,
+        from: &WarehouseId,
+        to: &WarehouseId,
+        car_id: &CarId,
+        quantity: i32,
+    ) -> Result<TransferOrder, TransferError> {
+        let mut tx = self.pool.begin().await?;
+
+        let source_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM warehouses WHERE warehouse_id = $1 AND is_active = true)",
+        )
+        .bind(from)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        if !source_exists {
+            return Err(TransferError::SourceWarehouseNotFound(from.to_string()));
+        }
+
+        let dest_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM warehouses WHERE warehouse_id = $1 AND is_active = true)",
+        )
+        .bind(to)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        if !dest_exists {
+            return Err(TransferError::DestinationWarehouseNotFound(to.to_string()));
+        }
+
+        let source_stock: Option<(i32, i32)> = sqlx::query_as(
+            r#"
+                SELECT quantity, reserved_quantity
+                FROM stock_locations
+                WHERE warehouse_id = $1 AND car_id = $2
+                FOR UPDATE
+                "#,
+        )
+        .bind(from)
+        .bind(car_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let (current_qty, reserved_qty) = source_stock.unwrap_or((0, 0));
+        let available = current_qty - reserved_qty;
+
+        if available < quantity {
+            return Err(TransferError::InsufficientStock {
+                available,
+                requested: quantity,
+            });
+        }
+
+        let transfer = sqlx::query_as::<_, TransferOrder>(
+                r#"
+                INSERT INTO transfer_orders
+                    (transfer_id, from_warehouse_id, to_warehouse_id, car_id, quantity, status, requested_at)
+                VALUES ($1, $2, $3, $4, $5, 'InTransit', NOW())
+                RETURNING *
+                "#
+            )
+            .bind(Uuid::new_v4())
+            .bind(from)
+            .bind(to)
+            .bind(car_id)
+            .bind(quantity)
+            .fetch_one(&mut *tx)
+            .await?;
+
+        let updated_rows = sqlx::query(
+            r#"
+                UPDATE stock_locations
+                SET quantity = quantity - $1, last_updated = NOW()
+                WHERE warehouse_id = $2 AND car_id = $3 AND quantity - reserved_quantity >= $1
+                "#,
+        )
+        .bind(quantity)
+        .bind(from)
+        .bind(car_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+        if updated_rows == 0 {
+            tx.rollback().await?;
+            return Err(TransferError::InsufficientStock {
+                available,
+                requested: quantity,
+            });
+        }
+
+        sqlx::query(
+            r#"
+                INSERT INTO stock_locations
+                    (warehouse_id, car_id, zone, quantity, reserved_quantity, last_updated)
+                VALUES ($1, $2, 'TRANSIT', $3, 0, NOW())
+                ON CONFLICT (warehouse_id, car_id)
+                DO UPDATE SET
+                    quantity = stock_locations.quantity + EXCLUDED.quantity,
+                    last_updated = NOW()
+                "#,
+        )
+        .bind(to)
+        .bind(car_id)
+        .bind(quantity)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(transfer)
+    }
+
+    async fn complete_transfer(&self, transfer_id: Uuid) -> Result<TransferOrder, TransferError> {
+        let mut tx = self.pool.begin().await?;
+
+        let transfer: Option<TransferOrder> =
+            sqlx::query_as("SELECT * FROM transfer_orders WHERE transfer_id = $1 FOR UPDATE")
+                .bind(transfer_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+
+        let transfer = transfer.ok_or(TransferError::TransferNotFound(transfer_id))?;
+
+        if transfer.status != TransferStatus::InTransit {
+            return Err(TransferError::InvalidState {
+                expected: "InTransit".to_string(),
+                found: format!("{:?}", transfer.status),
+            });
+        }
+
+        let completed = sqlx::query_as::<_, TransferOrder>(
+            r#"
+                UPDATE transfer_orders
+                SET status = 'Completed', completed_at = NOW()
+                WHERE transfer_id = $1
+                RETURNING *
+                "#,
+        )
+        .bind(transfer_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(completed)
+    }
+
+    async fn find_transfer_by_id(
+        &self,
+        transfer_id: Uuid,
+    ) -> Result<Option<TransferOrder>, sqlx::Error> {
+        sqlx::query_as::<_, TransferOrder>("SELECT * FROM transfer_orders WHERE transfer_id = $1")
+            .bind(transfer_id)
+            .fetch_optional(&self.pool)
+            .await
     }
 }
 

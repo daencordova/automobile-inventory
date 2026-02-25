@@ -41,9 +41,12 @@ use crate::state::AppState;
         crate::handlers::get_reservation_handler,
         crate::handlers::confirm_reservation_handler,
         crate::handlers::cancel_reservation_handler,
+        crate::handlers::create_warehouse_handler,
         crate::handlers::list_warehouses_handler,
         crate::handlers::get_warehouse_handler,
         crate::handlers::create_transfer_handler,
+        crate::handlers::complete_transfer_handler,
+        crate::handlers::get_transfer_handler,
         crate::handlers::get_dashboard_stats_handler,
         crate::handlers::get_depreciation_handler,
         crate::handlers::get_low_stock_handler,
@@ -66,6 +69,7 @@ use crate::state::AppState;
             ReservationResponse,
             ReservationStatus,
             CreateReservationDto,
+            CreateWarehouseDto,
             Warehouse,
             WarehouseId,
             StockLocation,
@@ -200,9 +204,15 @@ fn reservation_routes() -> Router<AppState> {
 
 fn warehouse_routes() -> Router<AppState> {
     Router::new()
+        .route("/", post(handlers::create_warehouse_handler))
         .route("/", get(handlers::list_warehouses_handler))
         .route("/{id}", get(handlers::get_warehouse_handler))
         .route("/transfers", post(handlers::create_transfer_handler))
+        .route("/transfers/{id}", get(handlers::get_transfer_handler))
+        .route(
+            "/transfers/{id}/complete",
+            post(handlers::complete_transfer_handler),
+        )
 }
 
 fn inventory_routes() -> Router<AppState> {

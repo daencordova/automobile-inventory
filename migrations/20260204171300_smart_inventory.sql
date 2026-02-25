@@ -158,6 +158,19 @@ VALUES
 ('C0009', 'BMW', '3 Series', 2017, 'Red', 'Hybrid', 'Automatic', 34430.1, 14, 'Sold'),
 ('C0010', 'Tesla', 'Model S', 2015, 'Silver', 'Electric', 'Manual', 42136.55, 0, 'Sold');
 
-INSERT INTO warehouses (warehouse_id, name, location, capacity_total)
-VALUES ('W001', 'Main Warehouse', 'Central Distribution Center', 10000)
-ON CONFLICT DO NOTHING;
+INSERT INTO warehouses (warehouse_id, name, location, latitude, longitude, capacity_total, capacity_used)
+VALUES
+    ('W0001', 'Main Distribution Center', 'Chicago, IL', 41.8781, -87.6298, 15000, 0),
+    ('W0002', 'West Coast Fulfillment', 'Oakland, CA', 37.8044, -122.2712, 8000, 0),
+    ('W0003', 'Southeast Hub', 'Atlanta, GA', 33.7490, -84.3880, 6000, 0),
+    ('W0004', 'Northwest Storage', 'Seattle, WA', 47.6062, -122.3321, 4000, 0),
+    ('W0005', 'South Central Depot', 'Houston, TX', 29.7604, -95.3698, 9000, 0),
+    ('W0006', 'Mountain Region Center', 'Denver, CO', 39.7392, -104.9903, 5500, 0)
+ON CONFLICT (warehouse_id) DO NOTHING;
+
+INSERT INTO stock_locations (warehouse_id, car_id, zone, quantity, reserved_quantity)
+VALUES
+    ('W0001', 'C0001', 'RECEIVING', 100, 10),
+    ('W0001', 'C0002', 'STORAGE-A', 75, 5),
+    ('W0001', 'C0003', 'STORAGE-B', 50, 0),
+    ('W0001', 'C0004', 'DISPATCH', 25, 25);
