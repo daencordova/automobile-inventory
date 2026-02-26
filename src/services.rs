@@ -8,6 +8,7 @@ use tokio::time::timeout;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
+use crate::cache::QueryCache;
 use crate::config::DatabaseConfig;
 use crate::error::{AppError, AppResult, ReservationError};
 use crate::models::{
@@ -26,35 +27,42 @@ use crate::uow::UnitOfWorkFactory;
 #[derive(Clone)]
 pub struct CarService {
     repository: Arc<dyn CarRepository + Send + Sync>,
+    cache: QueryCache,
 }
 
 impl CarService {
     pub fn new(repository: Arc<dyn CarRepository + Send + Sync>) -> Self {
-        Self { repository }
+        Self {
+            repository,
+            cache: QueryCache::new(),
+        }
     }
 
     #[instrument(skip(self))]
     pub async fn create_car(&self, dto: CreateCarDto) -> AppResult<CarResponse> {
-        tracing::info!("Creating new car");
-
         let entity = self
             .repository
             .create(dto)
             .await
             .map_err(|e| AppError::from_db(e, "Car"))?;
 
+        self.cache.invalidate_all_cars().await;
+
         Ok(CarResponse::from(entity))
     }
 
     #[instrument(skip(self))]
     pub async fn get_car_by_id(&self, id: CarId) -> AppResult<CarResponse> {
-        let entity = self
-            .repository
-            .find_by_id(id)
-            .await?
-            .ok_or(AppError::NotFound)?;
-
-        Ok(CarResponse::from(entity))
+        self.cache
+            .get_car_by_id(id.as_str(), || async {
+                let entity = self
+                    .repository
+                    .find_by_id(id.clone())
+                    .await?
+                    .ok_or(AppError::NotFound)?;
+                Ok(CarResponse::from(entity))
+            })
+            .await
     }
 
     #[instrument(skip(self))]
@@ -85,20 +93,9 @@ impl CarService {
                 _ => AppError::from_db(e, "Car"),
             })?;
 
+        self.cache.invalidate_car(id.as_str()).await;
+
         Ok(CarResponse::from(entity))
-    }
-
-    #[instrument(skip(self))]
-    pub async fn delete_car(&self, id: CarId) -> AppResult<()> {
-        self.repository
-            .soft_delete(&id)
-            .await
-            .map_err(|e| match e {
-                sqlx::Error::RowNotFound => AppError::NotFound,
-                _ => AppError::from_db(e, "Car"),
-            })?;
-
-        Ok(())
     }
 
     #[instrument(skip(self))]
@@ -141,6 +138,8 @@ impl CarService {
                 _ => AppError::from_db(e, "Car"),
             })?;
 
+        self.cache.invalidate_car(id.as_str()).await;
+
         Ok(CarResponse::from(entity))
     }
 
@@ -176,27 +175,52 @@ impl CarService {
                 _ => AppError::from_db(e, "Car"),
             })?;
 
+        self.cache.invalidate_car(id.as_str()).await;
+
         Ok(CarResponse::from(entity))
     }
 
     #[instrument(skip(self))]
+    pub async fn delete_car(&self, id: CarId) -> AppResult<()> {
+        self.repository
+            .soft_delete(&id)
+            .await
+            .map_err(|e| match e {
+                sqlx::Error::RowNotFound => AppError::NotFound,
+                _ => AppError::from_db(e, "Car"),
+            })?;
+
+        self.cache.invalidate_car(id.as_str()).await;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
     pub async fn get_dashboard_stats(&self) -> AppResult<DashboardStats> {
-        let stats: Vec<InventoryStatusStat> = self.repository.get_inventory_stats().await?;
+        self.cache
+            .get_dashboard_stats(|| async {
+                let stats: Vec<InventoryStatusStat> = self.repository.get_inventory_stats().await?;
 
-        let total_value = stats
-            .iter()
-            .map(|s| s.inventory_value.clone())
-            .fold(BigDecimal::from(0), |acc, val| acc + val);
+                let total_value = stats
+                    .iter()
+                    .map(|s| s.inventory_value.clone())
+                    .fold(BigDecimal::from(0), |acc, val| acc + val);
 
-        Ok(DashboardStats {
-            status_distribution: stats,
-            total_inventory_value: total_value,
-        })
+                Ok(DashboardStats {
+                    status_distribution: stats,
+                    total_inventory_value: total_value,
+                })
+            })
+            .await
     }
 
     pub async fn get_depreciation_report(&self) -> AppResult<Vec<CarResponse>> {
-        let cars = self.repository.get_depreciation_report().await?;
-        Ok(cars.into_iter().map(CarResponse::from).collect())
+        self.cache
+            .get_depreciation(|| async {
+                let cars = self.repository.get_depreciation_report().await?;
+                Ok(cars.into_iter().map(CarResponse::from).collect())
+            })
+            .await
     }
 
     pub async fn get_low_stock_report(
@@ -204,8 +228,17 @@ impl CarService {
         threshold: Option<i32>,
     ) -> AppResult<Vec<CarResponse>> {
         let limit = threshold.unwrap_or(3);
-        let cars = self.repository.get_low_stock_report(limit).await?;
-        Ok(cars.into_iter().map(CarResponse::from).collect())
+
+        self.cache
+            .get_low_stock(limit, || async {
+                let cars = self.repository.get_low_stock_report(limit).await?;
+                Ok(cars.into_iter().map(CarResponse::from).collect())
+            })
+            .await
+    }
+
+    pub fn cache_metrics(&self) -> crate::cache::CacheMetrics {
+        self.cache.metrics()
     }
 }
 

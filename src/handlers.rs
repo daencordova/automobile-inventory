@@ -101,6 +101,29 @@ pub async fn circuit_breaker_health_handler() -> impl IntoResponse {
 }
 
 #[utoipa::path(
+    get,
+    path = "/health/cache",
+    responses(
+        (status = 200, description = "Cache metrics", body = serde_json::Value)
+    ),
+    tag = "System"
+)]
+pub async fn cache_metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let metrics = state.car_service.cache_metrics();
+
+    let response = serde_json::json!({
+        "cache": {
+            "dashboard_stats_entries": metrics.dashboard_stats_size,
+            "car_by_id_entries": metrics.car_by_id_size,
+            "low_stock_entries": metrics.low_stock_size,
+            "depreciation_entries": metrics.depreciation_size,
+        }
+    });
+
+    Json(response)
+}
+
+#[utoipa::path(
     post,
     path = "/api/v1/cars",
     request_body = CreateCarDto,

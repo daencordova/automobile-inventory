@@ -246,7 +246,7 @@ pub struct CarEntity {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct CarResponse {
     pub id: String,
     pub brand: String,
@@ -305,7 +305,7 @@ impl CarSearchQuery {
     }
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow, utoipa::ToSchema)]
 pub struct InventoryStatusStat {
     pub status: CarStatus,
     pub total_units: i64,
@@ -313,7 +313,7 @@ pub struct InventoryStatusStat {
     pub inventory_value: BigDecimal,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DashboardStats {
     pub status_distribution: Vec<InventoryStatusStat>,
     #[schema(value_type = String)]

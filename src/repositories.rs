@@ -16,35 +16,42 @@ use crate::uow::UnitOfWork;
 #[async_trait]
 pub trait CarRepository: Send + Sync {
     async fn create(&self, dto: CreateCarDto) -> SqlxResult<CarEntity>;
+
+    async fn create_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        dto: CreateCarDto,
+    ) -> SqlxResult<CarEntity>;
+
     async fn find_by_id(&self, id: CarId) -> SqlxResult<Option<CarEntity>>;
+
+    async fn find_by_id_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        id: CarId,
+    ) -> SqlxResult<Option<CarEntity>>;
+
     async fn find_all(
         &self,
         filter: &CarFilter,
         pagination: &PaginationParams,
     ) -> SqlxResult<(Vec<CarEntity>, i64)>;
+
     async fn update(&self, id: &CarId, dto: CreateCarDto) -> SqlxResult<CarEntity>;
+    async fn update_partial(&self, id: &CarId, data: CarUpdateData) -> SqlxResult<CarEntity>;
+
     async fn update_with_version(
         &self,
         id: &CarId,
         dto: CreateCarDto,
         expected_version: i64,
     ) -> SqlxResult<CarEntity>;
+
     async fn update_with_version_data(
         &self,
         id: &CarId,
         data: CarUpdateData,
         expected_version: i64,
-    ) -> SqlxResult<CarEntity>;
-    async fn update_partial(&self, id: &CarId, data: CarUpdateData) -> SqlxResult<CarEntity>;
-    async fn soft_delete(&self, id: &CarId) -> SqlxResult<()>;
-    async fn get_inventory_stats(&self) -> SqlxResult<Vec<InventoryStatusStat>>;
-    async fn get_depreciation_report(&self) -> SqlxResult<Vec<CarEntity>>;
-    async fn get_low_stock_report(&self, threshold: i32) -> SqlxResult<Vec<CarEntity>>;
-
-    async fn create_in_uow(
-        &self,
-        uow: &mut UnitOfWork<'_>,
-        dto: CreateCarDto,
     ) -> SqlxResult<CarEntity>;
 
     async fn update_in_uow(
@@ -54,11 +61,10 @@ pub trait CarRepository: Send + Sync {
         data: CarUpdateData,
     ) -> SqlxResult<CarEntity>;
 
-    async fn find_by_id_in_uow(
-        &self,
-        uow: &mut UnitOfWork<'_>,
-        id: CarId,
-    ) -> SqlxResult<Option<CarEntity>>;
+    async fn soft_delete(&self, id: &CarId) -> SqlxResult<()>;
+    async fn get_inventory_stats(&self) -> SqlxResult<Vec<InventoryStatusStat>>;
+    async fn get_depreciation_report(&self) -> SqlxResult<Vec<CarEntity>>;
+    async fn get_low_stock_report(&self, threshold: i32) -> SqlxResult<Vec<CarEntity>>;
 }
 
 pub struct PgCarRepository {

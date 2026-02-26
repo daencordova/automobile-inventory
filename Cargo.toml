@@ -93,3 +93,5 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 ## Data Processing
 csv = "1.3"
+
+moka = { version = "0.12.13" , features = ["future"] }
