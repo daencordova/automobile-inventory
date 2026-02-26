@@ -51,6 +51,12 @@ pub enum ReservationError {
     #[error("Car not found")]
     CarNotFound,
 
+    #[error("Reservation not found")]
+    ReservationNotFound,
+
+    #[error("Reservation expired")]
+    ReservationExpired,
+
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
 }

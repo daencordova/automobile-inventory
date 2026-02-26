@@ -11,6 +11,8 @@ use crate::models::{
     StockAlertRow, StockLocation, TransferOrder, TransferStatus, Warehouse, WarehouseId,
 };
 
+use crate::uow::UnitOfWork;
+
 #[async_trait]
 pub trait CarRepository: Send + Sync {
     async fn create(&self, dto: CreateCarDto) -> SqlxResult<CarEntity>;
@@ -38,6 +40,25 @@ pub trait CarRepository: Send + Sync {
     async fn get_inventory_stats(&self) -> SqlxResult<Vec<InventoryStatusStat>>;
     async fn get_depreciation_report(&self) -> SqlxResult<Vec<CarEntity>>;
     async fn get_low_stock_report(&self, threshold: i32) -> SqlxResult<Vec<CarEntity>>;
+
+    async fn create_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        dto: CreateCarDto,
+    ) -> SqlxResult<CarEntity>;
+
+    async fn update_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        id: &CarId,
+        data: CarUpdateData,
+    ) -> SqlxResult<CarEntity>;
+
+    async fn find_by_id_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        id: CarId,
+    ) -> SqlxResult<Option<CarEntity>>;
 }
 
 pub struct PgCarRepository {
@@ -330,6 +351,83 @@ impl CarRepository for PgCarRepository {
         .fetch_all(&self.pool)
         .await
     }
+
+    async fn create_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        dto: CreateCarDto,
+    ) -> SqlxResult<CarEntity> {
+        sqlx::query_as::<_, CarEntity>(
+            r#"
+                INSERT INTO cars (
+                    car_id, brand, model, year, color, engine_type, transmission, price,
+                    quantity_in_stock, status
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING *
+                "#,
+        )
+        .bind(&dto.car_id)
+        .bind(&dto.brand)
+        .bind(&dto.model)
+        .bind(dto.year)
+        .bind(&dto.color)
+        .bind(&dto.engine_type)
+        .bind(&dto.transmission)
+        .bind(&dto.price)
+        .bind(dto.quantity_in_stock)
+        .bind(&dto.status)
+        .fetch_one(uow.connection())
+        .await
+    }
+
+    async fn update_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        id: &CarId,
+        data: CarUpdateData,
+    ) -> SqlxResult<CarEntity> {
+        sqlx::query_as::<_, CarEntity>(
+            r#"
+                UPDATE cars
+                SET brand = $1, model = $2, year = $3, color = $4, engine_type = $5,
+                    transmission = $6, price = $7, quantity_in_stock = $8, status = $9,
+                    updated_at = NOW()
+                WHERE car_id = $10 AND deleted_at IS NULL
+                RETURNING *
+                "#,
+        )
+        .bind(&data.brand)
+        .bind(&data.model)
+        .bind(data.year)
+        .bind(&data.color)
+        .bind(&data.engine_type)
+        .bind(&data.transmission)
+        .bind(&data.price)
+        .bind(data.quantity_in_stock)
+        .bind(&data.status)
+        .bind(id)
+        .fetch_optional(uow.connection())
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)
+    }
+
+    async fn find_by_id_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        id: CarId,
+    ) -> SqlxResult<Option<CarEntity>> {
+        sqlx::query_as::<_, CarEntity>(
+            r#"
+                SELECT *
+                FROM cars
+                WHERE car_id = $1 AND deleted_at IS NULL
+                "#,
+        )
+        .bind(&id)
+        .fetch_optional(uow.connection())
+        .await
+    }
 }
 
 #[async_trait]
@@ -366,6 +464,19 @@ pub trait ReservationRepository: Send + Sync {
         &self,
         car_id: CarId,
         dto: CreateReservationDto,
+    ) -> Result<Reservation, ReservationError>;
+
+    async fn create_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        car_id: &CarId,
+        dto: CreateReservationDto,
+    ) -> Result<Reservation, ReservationError>;
+
+    async fn confirm_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        reservation_id: Uuid,
     ) -> Result<Reservation, ReservationError>;
 }
 
@@ -559,6 +670,91 @@ impl ReservationRepository for PgReservationRepository {
             .map_err(ReservationError::Database)?;
 
         tx.commit().await.map_err(ReservationError::Database)?;
+
+        Ok(reservation)
+    }
+
+    async fn create_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        car_id: &CarId,
+        dto: CreateReservationDto,
+    ) -> Result<Reservation, ReservationError> {
+        let (total_stock, reserved): (i32, i64) = sqlx::query_as(
+            r#"
+                SELECT
+                    c.quantity_in_stock,
+                    COALESCE((
+                        SELECT SUM(r.quantity)
+                        FROM reservations r
+                        WHERE r.car_id = $1
+                        AND r.status = 'Pending'
+                        AND r.expires_at > NOW()
+                        FOR UPDATE
+                    ), 0)
+                FROM cars c
+                WHERE c.car_id = $1 AND c.deleted_at IS NULL
+                FOR UPDATE
+                "#,
+        )
+        .bind(car_id)
+        .fetch_one(uow.connection())
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => ReservationError::CarNotFound,
+            e => ReservationError::Database(e),
+        })?;
+
+        let available = total_stock - reserved as i32;
+
+        if available < dto.quantity {
+            return Err(ReservationError::InsufficientStock {
+                requested: dto.quantity,
+                available,
+            });
+        }
+
+        let reservation = sqlx::query_as::<_, Reservation>(
+                r#"
+                INSERT INTO reservations (
+                    id, car_id, quantity, reserved_by,
+                    expires_at, status, metadata, created_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 minute' * $5, 'Pending', $6, NOW(), NOW())
+                RETURNING *
+                "#
+            )
+            .bind(Uuid::new_v4())
+            .bind(car_id)
+            .bind(dto.quantity)
+            .bind(&dto.reserved_by)
+            .bind(dto.ttl_minutes as f64)
+            .bind(&dto.metadata)
+            .fetch_one(uow.connection())
+            .await
+            .map_err(ReservationError::Database)?;
+
+        Ok(reservation)
+    }
+
+    async fn confirm_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        reservation_id: Uuid,
+    ) -> Result<Reservation, ReservationError> {
+        let reservation = sqlx::query_as::<_, Reservation>(
+            r#"
+                UPDATE reservations
+                SET status = 'Confirmed', updated_at = NOW()
+                WHERE id = $1 AND status = 'Pending' AND expires_at > NOW()
+                RETURNING *
+                "#,
+        )
+        .bind(reservation_id)
+        .fetch_optional(uow.connection())
+        .await
+        .map_err(ReservationError::Database)?
+        .ok_or(ReservationError::ReservationNotFound)?;
 
         Ok(reservation)
     }
@@ -1057,5 +1253,51 @@ impl InventoryAnalyticsRepository for PgInventoryAnalyticsRepository {
             low_stock_items: row.5,
             stock_turnover_rate: 0.0,
         })
+    }
+}
+
+#[async_trait]
+pub trait SalesRepository: Send + Sync {
+    async fn record_sale_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        car_id: &CarId,
+        quantity: i32,
+        sale_price: &BigDecimal,
+        customer_id: Option<&str>,
+    ) -> SqlxResult<Uuid>;
+}
+
+pub struct PgSalesRepository;
+
+#[async_trait]
+impl SalesRepository for PgSalesRepository {
+    async fn record_sale_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        car_id: &CarId,
+        quantity: i32,
+        sale_price: &BigDecimal,
+        customer_id: Option<&str>,
+    ) -> SqlxResult<Uuid> {
+        let sale_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO sales_history (
+                id, car_id, quantity, sale_price, customer_id, sold_at
+            )
+            VALUES ($1, $2, $3, $4, $5, NOW())
+            "#,
+        )
+        .bind(sale_id)
+        .bind(car_id)
+        .bind(quantity)
+        .bind(sale_price)
+        .bind(customer_id)
+        .execute(uow.connection())
+        .await?;
+
+        Ok(sale_id)
     }
 }

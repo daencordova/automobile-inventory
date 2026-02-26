@@ -11,15 +11,17 @@ use uuid::Uuid;
 use crate::config::DatabaseConfig;
 use crate::error::{AppError, AppResult, ReservationError};
 use crate::models::{
-    AlertLevel, CarId, CarResponse, CarSearchQuery, CarUpdateData, CreateCarDto,
+    AlertLevel, CarId, CarResponse, CarSearchQuery, CarStatus, CarUpdateData, CreateCarDto,
     CreateReservationDto, DashboardStats, HealthStatus, InventoryAlertSummary, InventoryMetrics,
     InventoryStatusStat, PaginatedResponse, ReservationResponse, ReservationStatus, SalesVelocity,
     StockAlert, StockTransferDto, SystemHealth, TransferOrder, UpdateCarDto, Warehouse,
     WarehouseId,
 };
 use crate::repositories::{
-    CarRepository, InventoryAnalyticsRepository, ReservationRepository, WarehouseRepository,
+    CarRepository, InventoryAnalyticsRepository, ReservationRepository, SalesRepository,
+    WarehouseRepository,
 };
+use crate::uow::UnitOfWorkFactory;
 
 #[derive(Clone)]
 pub struct CarService {
@@ -235,6 +237,8 @@ impl ReservationService {
                     available: available.max(0) as u32,
                 },
                 ReservationError::CarNotFound => AppError::NotFound,
+                ReservationError::ReservationNotFound => AppError::ReservationNotFound,
+                ReservationError::ReservationExpired => AppError::ReservationExpired,
                 ReservationError::Database(e) => AppError::DatabaseError(e),
             })?;
 
@@ -584,4 +588,111 @@ impl InventoryAnalyticsService {
             .await
             .map_err(AppError::DatabaseError)
     }
+}
+
+pub struct SaleService {
+    uow_factory: Arc<dyn UnitOfWorkFactory>,
+    car_repo: Arc<dyn CarRepository>,
+    reservation_repo: Arc<dyn ReservationRepository>,
+    sales_repo: Arc<dyn SalesRepository>,
+}
+
+impl SaleService {
+    pub fn new(
+        uow_factory: Arc<dyn UnitOfWorkFactory>,
+        car_repo: Arc<dyn CarRepository>,
+        reservation_repo: Arc<dyn ReservationRepository>,
+        sales_repo: Arc<dyn SalesRepository>,
+    ) -> Self {
+        Self {
+            uow_factory,
+            car_repo,
+            reservation_repo,
+            sales_repo,
+        }
+    }
+
+    pub async fn process_sale(
+        &self,
+        reservation_id: Uuid,
+        customer_id: String,
+    ) -> AppResult<SaleReceipt> {
+        let mut uow = self.uow_factory.create_uow().await?;
+
+        let reservation = self
+            .reservation_repo
+            .confirm_in_uow(&mut uow, reservation_id)
+            .await
+            .map_err(|e| match e {
+                ReservationError::InsufficientStock {
+                    requested,
+                    available,
+                } => AppError::InsufficientStock {
+                    requested: requested as u32,
+                    available: available as u32,
+                },
+                ReservationError::CarNotFound => AppError::NotFound,
+                ReservationError::ReservationNotFound => AppError::ReservationNotFound,
+                ReservationError::ReservationExpired => AppError::ReservationExpired,
+                ReservationError::Database(db_err) => AppError::DatabaseError(db_err),
+            })?;
+
+        let car = self
+            .car_repo
+            .find_by_id_in_uow(&mut uow, reservation.car_id.clone())
+            .await
+            .map_err(AppError::DatabaseError)?
+            .ok_or(AppError::NotFound)?;
+
+        let update_data = CarUpdateData {
+            brand: car.brand.clone(),
+            model: car.model.clone(),
+            year: car.year,
+            color: car.color.unwrap_or_default(),
+            engine_type: car.engine_type.clone(),
+            transmission: car.transmission.unwrap_or_default(),
+            price: car.price.clone(),
+            quantity_in_stock: car.quantity_in_stock - reservation.quantity,
+            status: if car.quantity_in_stock - reservation.quantity == 0 {
+                CarStatus::Sold
+            } else {
+                car.status.clone()
+            },
+        };
+
+        self.car_repo
+            .update_in_uow(&mut uow, &reservation.car_id, update_data)
+            .await
+            .map_err(AppError::DatabaseError)?;
+
+        let sale_id = self
+            .sales_repo
+            .record_sale_in_uow(
+                &mut uow,
+                &reservation.car_id,
+                reservation.quantity,
+                &car.price,
+                Some(&customer_id),
+            )
+            .await
+            .map_err(AppError::DatabaseError)?;
+
+        uow.commit().await?;
+
+        Ok(SaleReceipt {
+            sale_id,
+            reservation_id,
+            car_id: reservation.car_id,
+            quantity: reservation.quantity,
+            total_price: car.price * reservation.quantity,
+        })
+    }
+}
+
+pub struct SaleReceipt {
+    pub sale_id: Uuid,
+    pub reservation_id: Uuid,
+    pub car_id: CarId,
+    pub quantity: i32,
+    pub total_price: BigDecimal,
 }
