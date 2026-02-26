@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 use axum::{
@@ -7,6 +8,7 @@ use axum::{
     response::{IntoResponse, Json},
 };
 
+use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
 use crate::error::{AppError, AppResult};
 use crate::extractors::ValidatedJson;
 use crate::middleware::extract_context;
@@ -17,6 +19,14 @@ use crate::models::{
     TransferOrder, UpdateCarDto, Warehouse, WarehouseId,
 };
 use crate::state::AppState;
+
+static DB_CIRCUIT_BREAKER: OnceLock<CircuitBreaker> = OnceLock::new();
+
+fn get_db_circuit_breaker() -> &'static CircuitBreaker {
+    DB_CIRCUIT_BREAKER.get_or_init(|| {
+        CircuitBreaker::with_config("database_operations", CircuitBreakerConfig::default())
+    })
+}
 
 #[utoipa::path(
     get,
@@ -63,6 +73,31 @@ pub async fn health_check_handler(State(state): State<AppState>) -> impl IntoRes
     };
 
     (http_status, Json(response)).into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/health/circuit-breakers",
+    responses(
+        (status = 200, description = "Circuit breaker status", body = serde_json::Value)
+    ),
+    tag = "System"
+)]
+pub async fn circuit_breaker_health_handler() -> impl IntoResponse {
+    let metrics = get_db_circuit_breaker().metrics();
+
+    let response = serde_json::json!({
+        "circuit_breakers": [{
+            "name": metrics.name,
+            "state": format!("{}", metrics.state),
+            "failure_count": metrics.failure_count,
+            "success_count": metrics.success_count,
+            "seconds_in_current_state": metrics.time_in_current_state.as_secs(),
+            "last_failure_seconds_ago": metrics.last_failure_time.map(|t| t.elapsed().as_secs()),
+        }]
+    });
+
+    Json(response)
 }
 
 #[utoipa::path(
@@ -113,6 +148,32 @@ pub async fn get_car_by_id_handler(
     );
 
     let car = state.car_service.get_car_by_id(id).await?;
+    Ok(Json(car))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/cars/{id}/resilient",
+    params(
+        ("id" = String, Path, description = "Unique ID of car")
+    ),
+    responses(
+        (status = 200, description = "Car found", body = Car),
+        (status = 503, description = "Service temporarily unavailable (circuit open)"),
+        (status = 404, description = "Car not found")
+    ),
+    tag = "Services"
+)]
+pub async fn get_car_by_id_resilient_handler(
+    Path(id): Path<CarId>,
+    State(state): State<AppState>,
+) -> AppResult<impl IntoResponse> {
+    let breaker = get_db_circuit_breaker();
+
+    let car = breaker
+        .call(|| async { state.car_service.get_car_by_id(id.clone()).await })
+        .await?;
+
     Ok(Json(car))
 }
 

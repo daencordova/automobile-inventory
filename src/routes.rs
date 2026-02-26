@@ -33,6 +33,7 @@ use crate::state::AppState;
     paths(
         crate::handlers::create_car_handler,
         crate::handlers::get_car_by_id_handler,
+        crate::handlers::get_car_by_id_resilient_handler,
         crate::handlers::get_cars_handler,
         crate::handlers::update_car_handler,
         crate::handlers::delete_car_handler,
@@ -54,6 +55,7 @@ use crate::state::AppState;
         crate::handlers::get_sales_velocity_handler,
         crate::handlers::get_inventory_metrics_handler,
         crate::handlers::health_check_handler,
+        crate::handlers::circuit_breaker_health_handler,
     ),
     components(
         schemas(
@@ -162,6 +164,10 @@ pub fn create_router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(handlers::health_check_handler))
+        .route(
+            "/health/circuit-breakers",
+            get(handlers::circuit_breaker_health_handler),
+        )
         .nest("/api/v1", v1_routes)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(outer_layers)
@@ -174,6 +180,10 @@ fn car_routes() -> Router<AppState> {
         .route("/", post(handlers::create_car_handler))
         .route("/", get(handlers::get_cars_handler))
         .route("/{id}", get(handlers::get_car_by_id_handler))
+        .route(
+            "/{id}/resilient",
+            get(handlers::get_car_by_id_resilient_handler),
+        )
         .route("/{id}", put(handlers::update_car_handler))
         .route(
             "/{id}/versioned",
