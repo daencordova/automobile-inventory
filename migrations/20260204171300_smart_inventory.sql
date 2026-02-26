@@ -97,6 +97,18 @@ CREATE TABLE job_executions (
     error_message TEXT
 );
 
+CREATE TABLE IF NOT EXISTS inventory_metrics_history (
+    metric_hour TIMESTAMPTZ PRIMARY KEY,
+    total_cars BIGINT NOT NULL,
+    total_value NUMERIC(20, 2) NOT NULL,
+    active_reservations BIGINT NOT NULL,
+    reserved_units BIGINT NOT NULL,
+    low_stock_count BIGINT NOT NULL,
+    available_stock_value NUMERIC(20, 2) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE INDEX idx_cars_active_id ON cars (car_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_cars_deleted_at ON cars (deleted_at);
 CREATE INDEX IF NOT EXISTS idx_cars_brand_model ON cars(brand, model);
@@ -112,6 +124,8 @@ CREATE INDEX idx_transfers_status ON transfer_orders(status);
 
 CREATE INDEX idx_sales_history_car_id ON sales_history(car_id);
 CREATE INDEX idx_sales_history_sold_at ON sales_history(sold_at);
+
+CREATE INDEX IF NOT EXISTS idx_metrics_hour ON inventory_metrics_history(metric_hour DESC);
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$

@@ -5,19 +5,20 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
 };
 
 use axum::{extract::Request, middleware::Next, response::Response};
 use dotenvy::dotenv;
+use once_cell::sync::OnceCell;
 use secrecy::ExposeSecret;
 use sqlx::postgres::PgPoolOptions;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tracing::warn;
 
 use automobile_inventory::{
+    background::BackgroundWorker,
     config::{create_cors_layer, load_config},
     error::AppError,
     middleware::request_context_middleware,
@@ -35,6 +36,7 @@ use automobile_inventory::{
 };
 
 static ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+static SHUTDOWN_TX: OnceCell<mpsc::Sender<()>> = OnceCell::new();
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
@@ -93,6 +95,13 @@ async fn main() -> Result<(), AppError> {
         start_time: std::time::Instant::now(),
     };
 
+    let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
+    let (bg_shutdown_tx, bg_shutdown_rx) = watch::channel(false);
+    SHUTDOWN_TX.set(shutdown_tx).ok();
+
+    let bg_worker = BackgroundWorker::new(pool.clone(), 60, bg_shutdown_rx);
+    let bg_handle = tokio::spawn(bg_worker.start());
+
     let app = create_router(app_state).layer(
         ServiceBuilder::new()
             .layer(axum::middleware::from_fn(request_context_middleware))
@@ -117,62 +126,59 @@ async fn main() -> Result<(), AppError> {
         .await
         .map_err(|e| AppError::ConfigError(format!("Failed to bind: {}", e)))?;
 
-    let (shutdown_tx, _) = mpsc::channel::<()>(1);
-
-    let server_handle = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(async {
-            let _ = shutdown_signal().await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        })
-        .await
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        shutdown_signal().await;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     });
 
     tokio::select! {
-        result = server_handle => {
-            result.map_err(|e| AppError::ConfigError(format!("Server task panicked: {}", e)))?
-                .map_err(|e| AppError::ConfigError(format!("Server error: {}", e)))?;
+        result = server => {
+            result.map_err(|e| AppError::ConfigError(format!("Server error: {}", e)))?;
         }
-        _ = shutdown_signal() => {
-            tracing::info!("Shutdown signal received, initiating graceful shutdown...");
+        _ = shutdown_rx.recv() => {
+            tracing::info!("Shutdown signal received via channel");
         }
     }
 
-    let _ = shutdown_tx.send(()).await;
+    tracing::info!("Signaling background worker to stop...");
+    let _ = bg_shutdown_tx.send(true);
 
-    tracing::info!("Draining active connections...");
-    let drain_start = Instant::now();
-    let drain_timeout = Duration::from_secs(config.server.shutdown_timeout_seconds);
+    tracing::info!("Draining active requests...");
+    let start_drain = std::time::Instant::now();
+    let drain_timeout = std::time::Duration::from_secs(config.server.shutdown_timeout_seconds);
 
-    loop {
-        let active = ACTIVE_REQUESTS.load(Ordering::SeqCst);
-
-        if active == 0 {
-            tracing::info!("All connections drained successfully");
-            break;
-        }
-
-        if drain_start.elapsed() > drain_timeout {
+    while ACTIVE_REQUESTS.load(Ordering::Relaxed) > 0 {
+        if start_drain.elapsed() > drain_timeout {
             tracing::warn!(
                 "Drain timeout reached with {} active requests still pending",
-                active
+                ACTIVE_REQUESTS.load(Ordering::Relaxed)
             );
             break;
         }
-
-        tracing::debug!("Waiting for {} active connections to complete...", active);
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
-    tracing::info!("Closing database pool...");
-    pool.close().await;
-    tracing::info!("Database pool closed");
+    tracing::info!("Waiting for background worker to complete...");
+    let bg_timeout = tokio::time::Duration::from_secs(5);
+    match tokio::time::timeout(bg_timeout, bg_handle).await {
+        Ok(Ok(())) => tracing::info!("Background worker stopped gracefully"),
+        Ok(Err(e)) => tracing::error!("Background worker panicked: {}", e),
+        Err(_) => tracing::warn!("Background worker stop timeout, forcing shutdown"),
+    }
 
+    tracing::info!(
+        "Draining complete. Active requests: {}",
+        ACTIVE_REQUESTS.load(Ordering::Relaxed)
+    );
+
+    tracing::info!("Shutting down gracefully...");
+    pool.close().await;
     tracing::info!("Shutdown complete");
+
     Ok(())
 }
 
