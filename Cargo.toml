@@ -11,7 +11,7 @@ description = "A production-grade Automobile Inventory System using Axum and Hex
 # ============================================
 
 ## Async Runtime
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.49.0", features = ["full", "signal"] }
 async-trait = "0.1.89"
 
 ## Error Handling & Logging

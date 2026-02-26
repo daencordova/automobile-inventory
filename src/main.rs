@@ -1,10 +1,18 @@
 use std::result::Result;
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
+use axum::{extract::Request, middleware::Next, response::Response};
 use dotenvy::dotenv;
-use metrics_exporter_prometheus::PrometheusBuilder;
 use secrecy::ExposeSecret;
 use sqlx::postgres::PgPoolOptions;
+use tokio::sync::mpsc;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tracing::warn;
@@ -25,6 +33,8 @@ use automobile_inventory::{
     },
     state::AppState,
 };
+
+static ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
@@ -86,6 +96,7 @@ async fn main() -> Result<(), AppError> {
     let app = create_router(app_state).layer(
         ServiceBuilder::new()
             .layer(axum::middleware::from_fn(request_context_middleware))
+            .layer(axum::middleware::from_fn(request_counter_middleware))
             .layer(cors_layer)
             .layer(CompressionLayer::new())
             .layer(tower_http::timeout::TimeoutLayer::with_status_code(
@@ -106,19 +117,73 @@ async fn main() -> Result<(), AppError> {
         .await
         .map_err(|e| AppError::ConfigError(format!("Failed to bind: {}", e)))?;
 
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .map_err(|e| AppError::ConfigError(format!("Server error: {}", e)))?;
+    let (shutdown_tx, _) = mpsc::channel::<()>(1);
 
-    tracing::info!("Shutting down gracefully...");
+    let server_handle = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async {
+            let _ = shutdown_signal().await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        })
+        .await
+    });
+
+    tokio::select! {
+        result = server_handle => {
+            result.map_err(|e| AppError::ConfigError(format!("Server task panicked: {}", e)))?
+                .map_err(|e| AppError::ConfigError(format!("Server error: {}", e)))?;
+        }
+        _ = shutdown_signal() => {
+            tracing::info!("Shutdown signal received, initiating graceful shutdown...");
+        }
+    }
+
+    let _ = shutdown_tx.send(()).await;
+
+    tracing::info!("Draining active connections...");
+    let drain_start = Instant::now();
+    let drain_timeout = Duration::from_secs(config.server.shutdown_timeout_seconds);
+
+    loop {
+        let active = ACTIVE_REQUESTS.load(Ordering::SeqCst);
+
+        if active == 0 {
+            tracing::info!("All connections drained successfully");
+            break;
+        }
+
+        if drain_start.elapsed() > drain_timeout {
+            tracing::warn!(
+                "Drain timeout reached with {} active requests still pending",
+                active
+            );
+            break;
+        }
+
+        tracing::debug!("Waiting for {} active connections to complete...", active);
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    tracing::info!("Closing database pool...");
     pool.close().await;
-    tracing::info!("Shutdown complete");
+    tracing::info!("Database pool closed");
 
+    tracing::info!("Shutdown complete");
     Ok(())
+}
+
+async fn request_counter_middleware(request: Request, next: Next) -> Response {
+    ACTIVE_REQUESTS.fetch_add(1, Ordering::SeqCst);
+
+    let response = next.run(request).await;
+
+    ACTIVE_REQUESTS.fetch_sub(1, Ordering::SeqCst);
+
+    response
 }
 
 async fn shutdown_signal() {
@@ -126,6 +191,7 @@ async fn shutdown_signal() {
         tokio::signal::ctrl_c()
             .await
             .expect("failed to install Ctrl+C handler");
+        tracing::info!("Received SIGINT (Ctrl+C)");
     };
 
     #[cfg(unix)]
@@ -134,22 +200,23 @@ async fn shutdown_signal() {
             .expect("failed to install signal handler")
             .recv()
             .await;
+        tracing::info!("Received SIGTERM");
     };
 
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = ctrl_c => { tracing::info!("Received SIGINT (Ctrl+C)"); },
-        _ = terminate => { tracing::info!("Received SIGTERM"); },
+        _ = ctrl_c => {},
+        _ = terminate => {},
     }
 
-    warn!("Signal received, starting graceful shutdown...");
+    warn!("Shutdown signal processed, starting graceful shutdown sequence...");
 }
 
 #[allow(dead_code)]
 fn init_metrics() {
-    PrometheusBuilder::new()
+    metrics_exporter_prometheus::PrometheusBuilder::new()
         .install_recorder()
         .expect("Failed to install Prometheus recorder");
 }
