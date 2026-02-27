@@ -19,7 +19,7 @@ use tracing::warn;
 
 use automobile_inventory::{
     background::BackgroundWorker,
-    config::{create_cors_layer, load_config},
+    config::{AppConfig, create_cors_layer, load_config},
     error::AppError,
     middleware::request_context_middleware,
     observability::init_tracing,
@@ -38,12 +38,62 @@ use automobile_inventory::{
 static ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static SHUTDOWN_TX: OnceCell<mpsc::Sender<()>> = OnceCell::new();
 
-#[tokio::main]
-async fn main() -> Result<(), AppError> {
+fn main() {
     dotenv().ok();
 
-    let config = load_config()?;
+    let config = match load_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Failed to load configuration: {}", e);
+            std::process::exit(1);
+        }
+    };
 
+    if let Err(e) = config.runtime.validate() {
+        eprintln!("Invalid runtime configuration: {}", e);
+        std::process::exit(1);
+    }
+
+    tracing::info!(
+        worker_threads = config.runtime.worker_threads,
+        max_blocking_threads = config.runtime.max_blocking_threads,
+        stack_size_mb = config.runtime.thread_stack_size_mb,
+        io_uring = config.runtime.enable_io_uring,
+        "Building Tokio runtime"
+    );
+
+    let mut runtime_builder = tokio::runtime::Builder::new_multi_thread();
+
+    runtime_builder
+        .worker_threads(config.runtime.worker_threads)
+        .max_blocking_threads(config.runtime.max_blocking_threads)
+        .thread_stack_size(config.runtime.thread_stack_size())
+        .enable_all();
+
+    #[cfg(all(target_os = "linux"))]
+    if config.runtime.enable_io_uring {
+        tracing::info!("io_uring enabled (Linux only)");
+    }
+
+    let runtime = match runtime_builder.build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("Failed to build Tokio runtime: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    runtime.block_on(async_main(config));
+}
+
+async fn async_main(config: AppConfig) {
+    if let Err(e) = run_application(config).await {
+        tracing::error!("Application error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+async fn run_application(config: AppConfig) -> Result<(), AppError> {
     init_tracing(config.environment.as_str());
 
     tracing::info!(

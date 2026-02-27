@@ -40,6 +40,9 @@ pub struct AppConfig {
     #[serde(default = "default_environment")]
     #[serde(skip)]
     pub environment: EnvironmentType,
+
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
 }
 
 #[derive(Debug, Clone, Validate, Deserialize)]
@@ -214,6 +217,104 @@ impl CorsConfig {
 
         Ok(origins)
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RuntimeConfig {
+    #[serde(default = "default_worker_threads")]
+    pub worker_threads: usize,
+
+    #[serde(default = "default_max_blocking_threads")]
+    pub max_blocking_threads: usize,
+
+    #[serde(default = "default_thread_stack_size_mb")]
+    pub thread_stack_size_mb: usize,
+
+    #[serde(default = "default_enable_io_uring")]
+    pub enable_io_uring: bool,
+
+    #[serde(default = "default_max_io_events_per_tick")]
+    pub max_io_events_per_tick: usize,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            worker_threads: default_worker_threads(),
+            max_blocking_threads: default_max_blocking_threads(),
+            thread_stack_size_mb: default_thread_stack_size_mb(),
+            enable_io_uring: default_enable_io_uring(),
+            max_io_events_per_tick: default_max_io_events_per_tick(),
+        }
+    }
+}
+
+impl RuntimeConfig {
+    pub fn thread_stack_size(&self) -> usize {
+        self.thread_stack_size_mb * 1024 * 1024
+    }
+
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.worker_threads == 0 {
+            return Err(AppError::ConfigError(
+                "runtime.worker_threads must be at least 1".into(),
+            ));
+        }
+
+        if self.max_blocking_threads < 4 {
+            return Err(AppError::ConfigError(
+                "runtime.max_blocking_threads must be at least 4".into(),
+            ));
+        }
+
+        if self.thread_stack_size_mb < 1 {
+            return Err(AppError::ConfigError(
+                "runtime.thread_stack_size_mb must be at least 1".into(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn production() -> Self {
+        Self {
+            worker_threads: num_cpus::get(),
+            max_blocking_threads: 512,
+            thread_stack_size_mb: 4,
+            enable_io_uring: cfg!(target_os = "linux"),
+            max_io_events_per_tick: 1024,
+        }
+    }
+
+    pub fn development() -> Self {
+        Self {
+            worker_threads: 2,
+            max_blocking_threads: 64,
+            thread_stack_size_mb: 2,
+            enable_io_uring: false,
+            max_io_events_per_tick: 256,
+        }
+    }
+}
+
+fn default_worker_threads() -> usize {
+    num_cpus::get()
+}
+
+fn default_max_blocking_threads() -> usize {
+    512
+}
+
+fn default_thread_stack_size_mb() -> usize {
+    2
+}
+
+fn default_enable_io_uring() -> bool {
+    false
+}
+
+fn default_max_io_events_per_tick() -> usize {
+    1024
 }
 
 #[derive(Debug, Clone, Validate, Deserialize)]
