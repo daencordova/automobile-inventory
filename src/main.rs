@@ -269,10 +269,3 @@ async fn shutdown_signal() {
 
     warn!("Shutdown signal processed, starting graceful shutdown sequence...");
 }
-
-#[allow(dead_code)]
-fn init_metrics() {
-    metrics_exporter_prometheus::PrometheusBuilder::new()
-        .install_recorder()
-        .expect("Failed to install Prometheus recorder");
-}
