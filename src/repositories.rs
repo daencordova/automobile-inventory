@@ -6,9 +6,10 @@ use uuid::Uuid;
 
 use crate::error::{ReservationError, TransferError};
 use crate::models::{
-    CarEntity, CarFilter, CarId, CarUpdateData, CreateCarDto, CreateReservationDto,
-    InventoryMetrics, InventoryStatusStat, PaginationParams, Reservation, SalesVelocity,
-    StockAlertRow, StockLocation, TransferOrder, TransferStatus, Warehouse, WarehouseId,
+    CarEntity, CarFilter, CarId, CarSearchRequest, CarUpdateData, CreateCarDto,
+    CreateReservationDto, InventoryMetrics, InventoryStatusStat, PaginationParams, Reservation,
+    SalesVelocity, StockAlertRow, StockLocation, TransferOrder, TransferStatus, Warehouse,
+    WarehouseId,
 };
 
 use crate::uow::UnitOfWork;
@@ -65,6 +66,12 @@ pub trait CarRepository: Send + Sync {
     async fn get_inventory_stats(&self) -> SqlxResult<Vec<InventoryStatusStat>>;
     async fn get_depreciation_report(&self) -> SqlxResult<Vec<CarEntity>>;
     async fn get_low_stock_report(&self, threshold: i32) -> SqlxResult<Vec<CarEntity>>;
+
+    async fn search(
+        &self,
+        request: &CarSearchRequest,
+        pagination: &PaginationParams,
+    ) -> SqlxResult<(Vec<(CarEntity, f32)>, i64)>;
 }
 
 pub struct PgCarRepository {
@@ -433,6 +440,95 @@ impl CarRepository for PgCarRepository {
         .bind(&id)
         .fetch_optional(uow.connection())
         .await
+    }
+
+    async fn search(
+        &self,
+        request: &CarSearchRequest,
+        pagination: &PaginationParams,
+    ) -> SqlxResult<(Vec<(CarEntity, f32)>, i64)> {
+        let (limit, offset, _, _) = pagination.normalize();
+
+        let mut builder = QueryBuilder::new(
+            r#"
+                SELECT
+                    car_id, brand, model, year, color, engine_type,
+                    transmission, price, quantity_in_stock, status,
+                    created_at, updated_at, deleted_at,
+                    ts_rank_cd(search_vector, query, 32) as rank,
+                    COUNT(*) OVER() as total_count
+                FROM cars,
+                LATERAL plainto_tsquery('simple', "#,
+        );
+
+        let search_term = request.query.as_deref().unwrap_or("");
+        builder.push_bind(search_term);
+        builder.push(") as query ");
+
+        builder.push("WHERE deleted_at IS NULL AND search_vector @@ query ");
+
+        if let Some(status) = &request.status {
+            builder.push(" AND status = ");
+            builder.push_bind(status);
+        }
+
+        if let Some(year_min) = request.year_min {
+            builder.push(" AND year >= ");
+            builder.push_bind(year_min);
+        }
+
+        if let Some(year_max) = request.year_max {
+            builder.push(" AND year <= ");
+            builder.push_bind(year_max);
+        }
+
+        if let Some(price_min) = &request.price_min {
+            builder.push(" AND price >= ");
+            builder.push_bind(price_min);
+        }
+
+        if let Some(price_max) = &request.price_max {
+            builder.push(" AND price <= ");
+            builder.push_bind(price_max);
+        }
+
+        if let Some(engine_type) = &request.engine_type {
+            builder.push(" AND engine_type = ");
+            builder.push_bind(engine_type);
+        }
+
+        let sort_by = request.sort_by.as_deref().unwrap_or("relevance");
+        builder.push(" ORDER BY ");
+        match sort_by {
+            "price_asc" => builder.push("price ASC"),
+            "price_desc" => builder.push("price DESC"),
+            "year_asc" => builder.push("year ASC"),
+            "year_desc" => builder.push("year DESC"),
+            _ => builder.push("rank DESC"),
+        };
+
+        builder.push(" LIMIT ");
+        builder.push_bind(limit);
+        builder.push(" OFFSET ");
+        builder.push_bind(offset);
+
+        #[derive(sqlx::FromRow)]
+        struct SearchRow {
+            #[sqlx(flatten)]
+            car: CarEntity,
+            rank: f32,
+            total_count: i64,
+        }
+
+        let rows = builder
+            .build_query_as::<SearchRow>()
+            .fetch_all(&self.pool)
+            .await?;
+
+        let total = rows.first().map(|r| r.total_count).unwrap_or(0);
+        let results = rows.into_iter().map(|r| (r.car, r.rank)).collect();
+
+        Ok((results, total))
     }
 }
 

@@ -35,6 +35,7 @@ use crate::state::AppState;
         crate::handlers::get_car_by_id_handler,
         crate::handlers::get_car_by_id_resilient_handler,
         crate::handlers::get_cars_handler,
+        crate::handlers::search_cars_handler,
         crate::handlers::update_car_handler,
         crate::handlers::delete_car_handler,
         crate::handlers::create_reservation_handler,
@@ -181,11 +182,8 @@ fn car_routes() -> Router<AppState> {
     Router::new()
         .route("/", post(handlers::create_car_handler))
         .route("/", get(handlers::get_cars_handler))
+        .route("/search", get(handlers::search_cars_handler))
         .route("/{id}", get(handlers::get_car_by_id_handler))
-        .route(
-            "/{id}/resilient",
-            get(handlers::get_car_by_id_resilient_handler),
-        )
         .route("/{id}", put(handlers::update_car_handler))
         .route(
             "/{id}/versioned",
@@ -195,6 +193,10 @@ fn car_routes() -> Router<AppState> {
         .route(
             "/{id}/reservations",
             post(handlers::create_reservation_handler),
+        )
+        .route(
+            "/{id}/resilient",
+            get(handlers::get_car_by_id_resilient_handler),
         )
         .route(
             "/analytics/dashboard",

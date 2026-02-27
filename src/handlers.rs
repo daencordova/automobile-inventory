@@ -13,10 +13,11 @@ use crate::error::{AppError, AppResult};
 use crate::extractors::ValidatedJson;
 use crate::middleware::extract_context;
 use crate::models::{
-    Car, CarId, CarResponse, CarSearchQuery, CreateCarDto, CreateReservationDto,
-    CreateWarehouseDto, DashboardStats, HealthResponse, HealthStatus, InventoryAlertSummary,
-    InventoryMetrics, PaginatedResponse, ReservationResponse, SalesVelocity, StockTransferDto,
-    TransferOrder, UpdateCarDto, Warehouse, WarehouseId,
+    Car, CarId, CarResponse, CarSearchQuery, CarSearchRequest, CarSearchResult, CarStatus,
+    CreateCarDto, CreateReservationDto, CreateWarehouseDto, DashboardStats, EngineType,
+    HealthResponse, HealthStatus, InventoryAlertSummary, InventoryMetrics, PaginatedResponse,
+    ReservationResponse, SalesVelocity, StockTransferDto, TransferOrder, UpdateCarDto, Warehouse,
+    WarehouseId,
 };
 use crate::state::AppState;
 
@@ -312,6 +313,35 @@ pub async fn update_car_versioned_handler(
 ) -> AppResult<impl IntoResponse> {
     let car = state.car_service.update_car_with_version(id, dto).await?;
     Ok(Json(car))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/cars/search",
+    params(
+        ("query" = Option<String>, Query, description = "Full-text search query"),
+        ("status" = Option<CarStatus>, Query, description = "Filter by status"),
+        ("year_min" = Option<i32>, Query, description = "Minimum year"),
+        ("year_max" = Option<i32>, Query, description = "Maximum year"),
+        ("price_min" = Option<f64>, Query, description = "Minimum price"),
+        ("price_max" = Option<f64>, Query, description = "Maximum price"),
+        ("engine_type" = Option<EngineType>, Query, description = "Engine type"),
+        ("page" = Option<u32>, Query, description = "Page number"),
+        ("page_size" = Option<u32>, Query, description = "Items per page"),
+        ("sort_by" = Option<String>, Query, description = "Sort: relevance, price_asc, price_desc, year_asc, year_desc")
+    ),
+    responses(
+        (status = 200, description = "Search results with relevance scores", body = PaginatedResponse<CarSearchResult>),
+        (status = 400, description = "Invalid search parameters")
+    ),
+    tag = "Services"
+)]
+pub async fn search_cars_handler(
+    State(state): State<AppState>,
+    Query(params): Query<CarSearchRequest>,
+) -> AppResult<impl IntoResponse> {
+    let result = state.car_service.search_cars(params).await?;
+    Ok(Json(result))
 }
 
 #[utoipa::path(

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS cars (
     economic_order_qty INTEGER DEFAULT 10 CHECK (economic_order_qty > 0),
     version BIGINT DEFAULT 1,
     status car_status NOT NULL DEFAULT 'Available',
+    search_vector tsvector,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ DEFAULT NULL
@@ -113,6 +114,7 @@ CREATE INDEX idx_cars_active_id ON cars (car_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_cars_deleted_at ON cars (deleted_at);
 CREATE INDEX IF NOT EXISTS idx_cars_brand_model ON cars(brand, model);
 CREATE INDEX IF NOT EXISTS idx_cars_active_search ON cars(brand, status) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_cars_search_vector ON cars USING GIN(search_vector);
 
 CREATE INDEX idx_reservations_car_id ON reservations(car_id);
 CREATE INDEX idx_reservations_status ON reservations(status) WHERE status = 'Pending';
@@ -143,6 +145,24 @@ CREATE OR REPLACE FUNCTION increment_car_version()
         RETURN NEW;
     END;
     $$ language 'plpgsql';
+
+CREATE OR REPLACE FUNCTION cars_search_vector_update()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.search_vector :=
+        setweight(to_tsvector('simple', COALESCE(NEW.brand, '')), 'A') ||
+        setweight(to_tsvector('simple', COALESCE(NEW.model, '')), 'B') ||
+        setweight(to_tsvector('simple', COALESCE(NEW.color, '')), 'C') ||
+        setweight(to_tsvector('simple', COALESCE(NEW.transmission, '')), 'D');
+    RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+DROP TRIGGER IF EXISTS cars_search_vector_trigger ON cars;
+CREATE TRIGGER cars_search_vector_trigger
+    BEFORE INSERT OR UPDATE ON cars
+    FOR EACH ROW
+    EXECUTE FUNCTION cars_search_vector_update();
 
 CREATE TRIGGER update_cars_modtime
     BEFORE UPDATE ON cars
@@ -188,3 +208,10 @@ VALUES
     ('W0001', 'C0002', 'STORAGE-A', 75, 5),
     ('W0001', 'C0003', 'STORAGE-B', 50, 0),
     ('W0001', 'C0004', 'DISPATCH', 25, 25);
+
+UPDATE cars SET search_vector =
+    setweight(to_tsvector('simple', COALESCE(brand, '')), 'A') ||
+    setweight(to_tsvector('simple', COALESCE(model, '')), 'B') ||
+    setweight(to_tsvector('simple', COALESCE(color, '')), 'C') ||
+    setweight(to_tsvector('simple', COALESCE(transmission, '')), 'D')
+WHERE search_vector IS NULL;

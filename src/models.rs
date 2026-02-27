@@ -305,6 +305,72 @@ impl CarSearchQuery {
     }
 }
 
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct CarSearchRequest {
+    #[validate(length(min = 2, max = 100))]
+    #[schema(example = "toyota corolla")]
+    pub query: Option<String>,
+
+    #[schema(example = "Available")]
+    pub status: Option<CarStatus>,
+
+    #[schema(example = 2020, minimum = 1886, maximum = 2026)]
+    pub year_min: Option<i32>,
+
+    #[schema(example = 2024, minimum = 1886, maximum = 2026)]
+    pub year_max: Option<i32>,
+
+    #[schema(value_type = f64, example = 20000.0)]
+    pub price_min: Option<BigDecimal>,
+
+    #[schema(value_type = f64, example = 50000.0)]
+    pub price_max: Option<BigDecimal>,
+
+    #[schema(example = "Electric")]
+    pub engine_type: Option<EngineType>,
+
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+
+    #[schema(example = "relevance")]
+    pub sort_by: Option<String>,
+}
+
+impl CarSearchRequest {
+    pub fn has_search_query(&self) -> bool {
+        self.query
+            .as_ref()
+            .map(|q| !q.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    pub fn pagination(&self) -> PaginationParams {
+        PaginationParams {
+            page: self.page,
+            page_size: self.page_size,
+        }
+    }
+
+    pub fn validate_year_range(&self) -> Result<(), AppError> {
+        if let (Some(min), Some(max)) = (self.year_min, self.year_max) {
+            if min > max {
+                let mut errors = validator::ValidationErrors::new();
+                errors.add("year_min", validator::ValidationError::new("range"));
+                return Err(AppError::ValidationError(errors));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CarSearchResult {
+    #[serde(flatten)]
+    pub car: CarResponse,
+    pub relevance_score: f32,
+    pub search_highlights: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow, utoipa::ToSchema)]
 pub struct InventoryStatusStat {
     pub status: CarStatus,

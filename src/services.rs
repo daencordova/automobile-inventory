@@ -12,11 +12,11 @@ use crate::cache::QueryCache;
 use crate::config::DatabaseConfig;
 use crate::error::{AppError, AppResult, ReservationError};
 use crate::models::{
-    AlertLevel, CarId, CarResponse, CarSearchQuery, CarStatus, CarUpdateData, CreateCarDto,
-    CreateReservationDto, DashboardStats, HealthStatus, InventoryAlertSummary, InventoryMetrics,
-    InventoryStatusStat, PaginatedResponse, ReservationResponse, ReservationStatus, SalesVelocity,
-    StockAlert, StockTransferDto, SystemHealth, TransferOrder, UpdateCarDto, Warehouse,
-    WarehouseId,
+    AlertLevel, CarFilter, CarId, CarResponse, CarSearchQuery, CarSearchRequest, CarSearchResult,
+    CarStatus, CarUpdateData, CreateCarDto, CreateReservationDto, DashboardStats, HealthStatus,
+    InventoryAlertSummary, InventoryMetrics, InventoryStatusStat, PaginatedResponse,
+    ReservationResponse, ReservationStatus, SalesVelocity, StockAlert, StockTransferDto,
+    SystemHealth, TransferOrder, UpdateCarDto, Warehouse, WarehouseId,
 };
 use crate::repositories::{
     CarRepository, InventoryAnalyticsRepository, ReservationRepository, SalesRepository,
@@ -193,6 +193,49 @@ impl CarService {
         self.cache.invalidate_car(id.as_str()).await;
 
         Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn search_cars(
+        &self,
+        request: CarSearchRequest,
+    ) -> AppResult<PaginatedResponse<CarSearchResult>> {
+        request.validate_year_range()?;
+
+        let pagination = request.pagination();
+        let (_, _, page, page_size) = pagination.normalize();
+
+        if !request.has_search_query() {
+            let filter = CarFilter {
+                brand: None,
+                status: request.status.as_ref().map(|s| format!("{:?}", s)),
+            };
+            let (entities, total) = self.repository.find_all(&filter, &pagination).await?;
+
+            let results = entities
+                .into_iter()
+                .map(|e| CarSearchResult {
+                    car: CarResponse::from(e),
+                    relevance_score: 1.0,
+                    search_highlights: vec![],
+                })
+                .collect();
+
+            return Ok(PaginatedResponse::new(results, total, page, page_size));
+        }
+
+        let (results, total) = self.repository.search(&request, &pagination).await?;
+
+        let dtos = results
+            .into_iter()
+            .map(|(entity, score)| CarSearchResult {
+                car: CarResponse::from(entity),
+                relevance_score: score,
+                search_highlights: vec![],
+            })
+            .collect();
+
+        Ok(PaginatedResponse::new(dtos, total, page, page_size))
     }
 
     #[instrument(skip(self))]
