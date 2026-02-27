@@ -12,7 +12,7 @@ pub struct UnitOfWork<'a> {
 
 impl<'a> UnitOfWork<'a> {
     pub async fn begin(pool: &sqlx::PgPool) -> Result<Self, AppError> {
-        let tx = pool.begin().await.map_err(|e| AppError::DatabaseError(e))?;
+        let tx = pool.begin().await.map_err(AppError::DatabaseError)?;
 
         Ok(Self {
             tx: Some(tx),
@@ -32,7 +32,7 @@ impl<'a> UnitOfWork<'a> {
             AppError::BusinessRuleViolation("Transaction already consumed".to_string())
         })?;
 
-        tx.commit().await.map_err(|e| AppError::DatabaseError(e))?;
+        tx.commit().await.map_err(AppError::DatabaseError)?;
 
         self.committed = true;
         Ok(())
@@ -49,9 +49,7 @@ impl<'a> UnitOfWork<'a> {
             AppError::BusinessRuleViolation("Transaction already consumed".to_string())
         })?;
 
-        tx.rollback()
-            .await
-            .map_err(|e| AppError::DatabaseError(e))?;
+        tx.rollback().await.map_err(AppError::DatabaseError)?;
 
         self.rolled_back = true;
         Ok(())

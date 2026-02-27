@@ -169,18 +169,18 @@ impl CircuitBreaker {
 
         if *state == CircuitState::Open {
             let last_fail = *self.last_failure_time.read().unwrap();
-            if let Some(time) = last_fail {
-                if time.elapsed() >= self.config.open_duration {
-                    tracing::info!(
-                        circuit_breaker = %self.name,
-                        open_duration = ?self.config.open_duration,
-                        "Transitioning from Open to HalfOpen"
-                    );
-                    *state = CircuitState::HalfOpen;
-                    *self.last_state_change.write().unwrap() = Instant::now();
-                    *self.success_count.write().unwrap() = 0;
-                    *self.half_open_calls.write().unwrap() = 0;
-                }
+            if let Some(time) = last_fail
+                && time.elapsed() >= self.config.open_duration
+            {
+                tracing::info!(
+                    circuit_breaker = %self.name,
+                    open_duration = ?self.config.open_duration,
+                    "Transitioning from Open to HalfOpen"
+                );
+                *state = CircuitState::HalfOpen;
+                *self.last_state_change.write().unwrap() = Instant::now();
+                *self.success_count.write().unwrap() = 0;
+                *self.half_open_calls.write().unwrap() = 0;
             }
         }
     }

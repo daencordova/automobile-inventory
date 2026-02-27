@@ -612,7 +612,7 @@ impl WarehouseService {
             .find_transfer_by_id(transfer_id)
             .await
             .map_err(AppError::DatabaseError)?
-            .ok_or_else(|| AppError::TransferNotFound(transfer_id).into())
+            .ok_or_else(|| AppError::TransferNotFound(transfer_id))
     }
 }
 

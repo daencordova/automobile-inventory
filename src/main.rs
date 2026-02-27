@@ -70,7 +70,7 @@ fn main() {
         .thread_stack_size(config.runtime.thread_stack_size())
         .enable_all();
 
-    #[cfg(all(target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     if config.runtime.enable_io_uring {
         tracing::info!("io_uring enabled (Linux only)");
     }

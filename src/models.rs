@@ -352,13 +352,14 @@ impl CarSearchRequest {
     }
 
     pub fn validate_year_range(&self) -> Result<(), AppError> {
-        if let (Some(min), Some(max)) = (self.year_min, self.year_max) {
-            if min > max {
-                let mut errors = validator::ValidationErrors::new();
-                errors.add("year_min", validator::ValidationError::new("range"));
-                return Err(AppError::ValidationError(errors));
-            }
+        if let (Some(min), Some(max)) = (self.year_min, self.year_max)
+            && min > max
+        {
+            let mut errors = validator::ValidationErrors::new();
+            errors.add("year_min", validator::ValidationError::new("range"));
+            return Err(AppError::ValidationError(errors));
         }
+
         Ok(())
     }
 }

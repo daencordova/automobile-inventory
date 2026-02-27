@@ -168,6 +168,12 @@ impl QueryCache {
     }
 }
 
+impl Default for QueryCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug)]
 pub struct CacheMetrics {
     pub dashboard_stats_size: u64,

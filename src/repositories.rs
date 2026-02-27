@@ -968,8 +968,8 @@ impl WarehouseRepository for PgWarehouseRepository {
         .bind(&id)
         .bind(name)
         .bind(location)
-        .bind(latitude.map(BigDecimal::from_f64).flatten())
-        .bind(longitude.map(BigDecimal::from_f64).flatten())
+        .bind(latitude.and_then(BigDecimal::from_f64))
+        .bind(longitude.and_then(BigDecimal::from_f64))
         .bind(capacity_total)
         .fetch_one(&self.pool)
         .await
