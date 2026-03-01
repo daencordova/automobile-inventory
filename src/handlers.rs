@@ -85,7 +85,7 @@ pub async fn health_check_handler(State(state): State<AppState>) -> impl IntoRes
     tag = "System"
 )]
 pub async fn circuit_breaker_health_handler() -> impl IntoResponse {
-    let metrics = get_db_circuit_breaker().metrics();
+    let metrics = get_db_circuit_breaker().metrics().await;
 
     let response = serde_json::json!({
         "circuit_breakers": [{

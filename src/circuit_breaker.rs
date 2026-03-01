@@ -1,5 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use tokio::sync::RwLock;
 
 use crate::error::AppError;
 
@@ -120,9 +122,9 @@ impl CircuitBreaker {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<T, AppError>>,
     {
-        self.check_and_transition_state();
+        self.check_and_transition_state().await;
 
-        let current_state = *self.state.read().unwrap();
+        let current_state = *self.state.read().await;
 
         match current_state {
             CircuitState::Open => {
@@ -134,7 +136,7 @@ impl CircuitBreaker {
                 return Err(CircuitError::Open);
             }
             CircuitState::HalfOpen => {
-                let mut calls = self.half_open_calls.write().unwrap();
+                let mut calls = self.half_open_calls.write().await;
                 if *calls >= self.config.half_open_max_calls {
                     tracing::debug!(
                         circuit_breaker = %self.name,
@@ -154,43 +156,44 @@ impl CircuitBreaker {
 
         match result {
             Ok(value) => {
-                self.on_success(start.elapsed());
+                self.on_success(start.elapsed()).await;
                 Ok(value)
             }
             Err(e) => {
-                self.on_failure(start.elapsed());
+                self.on_failure(start.elapsed()).await;
                 Err(CircuitError::Underlying(e))
             }
         }
     }
 
-    fn check_and_transition_state(&self) {
-        let mut state = self.state.write().unwrap();
+    async fn check_and_transition_state(&self) {
+        let mut state = self.state.write().await;
 
         if *state == CircuitState::Open {
-            let last_fail = *self.last_failure_time.read().unwrap();
-            if let Some(time) = last_fail
-                && time.elapsed() >= self.config.open_duration
-            {
-                tracing::info!(
-                    circuit_breaker = %self.name,
-                    open_duration = ?self.config.open_duration,
-                    "Transitioning from Open to HalfOpen"
-                );
-                *state = CircuitState::HalfOpen;
-                *self.last_state_change.write().unwrap() = Instant::now();
-                *self.success_count.write().unwrap() = 0;
-                *self.half_open_calls.write().unwrap() = 0;
+            let last_fail = *self.last_failure_time.read().await;
+            if let Some(time) = last_fail {
+                let elapsed = time.elapsed();
+                if elapsed >= self.config.open_duration {
+                    tracing::info!(
+                        circuit_breaker = %self.name,
+                        open_duration = ?self.config.open_duration,
+                        "Transitioning from Open to HalfOpen"
+                    );
+                    *state = CircuitState::HalfOpen;
+                    *self.last_state_change.write().await = Instant::now();
+                    *self.success_count.write().await = 0;
+                    *self.half_open_calls.write().await = 0;
+                }
             }
         }
     }
 
-    fn on_success(&self, duration: Duration) {
-        let state = *self.state.read().unwrap();
+    async fn on_success(&self, duration: Duration) {
+        let state = *self.state.read().await;
 
         match state {
             CircuitState::HalfOpen => {
-                let mut successes = self.success_count.write().unwrap();
+                let mut successes = self.success_count.write().await;
                 *successes += 1;
 
                 tracing::debug!(
@@ -201,22 +204,22 @@ impl CircuitBreaker {
                 );
 
                 if *successes >= self.config.success_threshold {
-                    let mut state = self.state.write().unwrap();
-                    if *state == CircuitState::HalfOpen {
+                    let mut state_guard = self.state.write().await;
+                    if *state_guard == CircuitState::HalfOpen {
                         tracing::info!(
                             circuit_breaker = %self.name,
                             success_count = *successes,
                             "Transitioning from HalfOpen to Closed (recovered)"
                         );
-                        *state = CircuitState::Closed;
-                        *self.last_state_change.write().unwrap() = Instant::now();
-                        *self.failure_count.write().unwrap() = 0;
-                        *self.half_open_calls.write().unwrap() = 0;
+                        *state_guard = CircuitState::Closed;
+                        *self.last_state_change.write().await = Instant::now();
+                        *self.failure_count.write().await = 0;
+                        *self.half_open_calls.write().await = 0;
                     }
                 }
             }
             CircuitState::Closed => {
-                let mut failures = self.failure_count.write().unwrap();
+                let mut failures = self.failure_count.write().await;
                 if *failures > 0 {
                     *failures = 0;
                     tracing::debug!(
@@ -236,11 +239,12 @@ impl CircuitBreaker {
         );
     }
 
-    fn on_failure(&self, duration: Duration) {
-        let mut failures = self.failure_count.write().unwrap();
+    async fn on_failure(&self, duration: Duration) {
+        // ← async fn
+        let mut failures = self.failure_count.write().await;
         *failures += 1;
 
-        let current_state = *self.state.read().unwrap();
+        let current_state = *self.state.read().await;
 
         tracing::debug!(
             circuit_breaker = %self.name,
@@ -252,7 +256,7 @@ impl CircuitBreaker {
         );
 
         if *failures >= self.config.failure_threshold && current_state != CircuitState::Open {
-            let mut state = self.state.write().unwrap();
+            let mut state = self.state.write().await;
             if *state != CircuitState::Open {
                 tracing::warn!(
                     circuit_breaker = %self.name,
@@ -261,26 +265,26 @@ impl CircuitBreaker {
                     "Transitioning to Open (failure threshold reached)"
                 );
                 *state = CircuitState::Open;
-                *self.last_failure_time.write().unwrap() = Some(Instant::now());
-                *self.last_state_change.write().unwrap() = Instant::now();
-                *self.success_count.write().unwrap() = 0;
-                *self.half_open_calls.write().unwrap() = 0;
+                *self.last_failure_time.write().await = Some(Instant::now());
+                *self.last_state_change.write().await = Instant::now();
+                *self.success_count.write().await = 0;
+                *self.half_open_calls.write().await = 0;
             }
         }
     }
 
-    pub fn state(&self) -> CircuitState {
-        *self.state.read().unwrap()
+    pub async fn state(&self) -> CircuitState {
+        *self.state.read().await
     }
 
-    pub fn metrics(&self) -> CircuitBreakerMetrics {
+    pub async fn metrics(&self) -> CircuitBreakerMetrics {
         CircuitBreakerMetrics {
             name: self.name.clone(),
-            state: self.state(),
-            failure_count: *self.failure_count.read().unwrap(),
-            success_count: *self.success_count.read().unwrap(),
-            last_failure_time: *self.last_failure_time.read().unwrap(),
-            time_in_current_state: self.last_state_change.read().unwrap().elapsed(),
+            state: *self.state.read().await,
+            failure_count: *self.failure_count.read().await,
+            success_count: *self.success_count.read().await,
+            last_failure_time: *self.last_failure_time.read().await,
+            time_in_current_state: self.last_state_change.read().await.elapsed(),
         }
     }
 }
