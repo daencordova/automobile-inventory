@@ -275,6 +275,7 @@ pub async fn delete_car_handler(
     ),
     responses(
         (status = 201, description = "Reservation created", body = ReservationResponse),
+        (status = 400, description = "Validation error"),
         (status = 409, description = "Insufficient stock"),
         (status = 404, description = "Car not found")
     ),
@@ -284,11 +285,25 @@ pub async fn create_reservation_handler(
     State(state): State<AppState>,
     Path(car_id): Path<CarId>,
     ValidatedJson(dto): ValidatedJson<CreateReservationDto>,
-) -> AppResult<impl IntoResponse> {
+) -> Result<(StatusCode, Json<ReservationResponse>), AppError> {
+    if let Some(ref dto_car_id) = dto.car_id
+        && dto_car_id != car_id.as_str()
+    {
+        return Err(AppError::ValidationError({
+            let mut errors = validator::ValidationErrors::new();
+            errors.add(
+                "car_id",
+                validator::ValidationError::new("mismatch_path_body"),
+            );
+            errors
+        }));
+    }
+
     let reservation = state
         .reservation_service
         .create_reservation(car_id, dto)
         .await?;
+
     Ok((StatusCode::CREATED, Json(reservation)))
 }
 

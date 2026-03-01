@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, types::Uuid};
 use utoipa::ToSchema;
-use validator::Validate;
+use validator::{Validate, ValidationError};
 
 use crate::error::AppError;
 
@@ -131,6 +131,29 @@ impl FromStr for CarId {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::new(s.to_string())
     }
+}
+
+pub fn validate_car_id_format(car_id: &str) -> Result<(), ValidationError> {
+    if !car_id.starts_with('C') {
+        let mut error = ValidationError::new("car_id_format");
+        error.message = Some("car_id must start with 'C'".into());
+        return Err(error);
+    }
+
+    if car_id.len() < 5 {
+        let mut error = ValidationError::new("car_id_format");
+        error.message = Some("car_id must be at least 5 characters".into());
+        return Err(error);
+    }
+
+    let suffix = &car_id[1..];
+    if !suffix.chars().all(|c| c.is_ascii_digit()) {
+        let mut error = ValidationError::new("car_id_format");
+        error.message = Some("car_id must have digits after 'C'".into());
+        return Err(error);
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::Type, PartialEq)]
@@ -423,6 +446,10 @@ pub struct CreateReservationDto {
     pub ttl_minutes: i32,
 
     pub metadata: Option<serde_json::Value>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(custom(function = "validate_car_id_format"))]
+    pub car_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

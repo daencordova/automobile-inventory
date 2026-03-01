@@ -300,6 +300,14 @@ impl ReservationService {
         car_id: CarId,
         dto: CreateReservationDto,
     ) -> AppResult<ReservationResponse> {
+        if let Some(ref dto_car_id) = dto.car_id {
+            tracing::debug!(
+                path_car_id = %car_id,
+                dto_car_id = %dto_car_id,
+                "Creating reservation with cross-validated car_id"
+            );
+        }
+
         let reservation = self
             .reservation_repo
             .execute_reservation_atomic(car_id, dto)
