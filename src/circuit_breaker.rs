@@ -77,6 +77,7 @@ pub enum CircuitError<E> {
     Open,
     HalfOpenLimit,
     Underlying(E),
+    Timeout,
 }
 
 impl<E: std::fmt::Display> std::fmt::Display for CircuitError<E> {
@@ -87,6 +88,7 @@ impl<E: std::fmt::Display> std::fmt::Display for CircuitError<E> {
                 write!(f, "Circuit breaker half-open call limit reached")
             }
             CircuitError::Underlying(e) => write!(f, "Underlying error: {}", e),
+            CircuitError::Timeout => write!(f, "Circuit breaker timeout"),
         }
     }
 }
@@ -240,7 +242,6 @@ impl CircuitBreaker {
     }
 
     async fn on_failure(&self, duration: Duration) {
-        // ← async fn
         let mut failures = self.failure_count.write().await;
         *failures += 1;
 
@@ -304,6 +305,7 @@ impl From<CircuitError<AppError>> for AppError {
         match err {
             CircuitError::Open => AppError::ServiceUnavailable,
             CircuitError::HalfOpenLimit => AppError::ServiceUnavailable,
+            CircuitError::Timeout => AppError::ServiceUnavailable,
             CircuitError::Underlying(app_err) => app_err,
         }
     }

@@ -3,11 +3,36 @@ use axum::{
     response::{IntoResponse, Json, Response},
 };
 use sqlx::migrate::MigrateError;
+use std::borrow::Cow;
+use std::fmt;
+use std::sync::atomic::{AtomicU8, Ordering};
 use thiserror::Error;
 use tracing::{error, warn};
 use uuid::Uuid;
 
+pub use crate::circuit_breaker::CircuitError;
+
 pub type AppResult<T> = Result<T, AppError>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ErrorExposure {
+    Debug = 0,
+    Safe = 1,
+}
+
+pub static ERROR_EXPOSURE: AtomicU8 = AtomicU8::new(ErrorExposure::Safe as u8);
+
+pub fn set_error_exposure(exposure: ErrorExposure) {
+    ERROR_EXPOSURE.store(exposure as u8, Ordering::SeqCst);
+}
+
+pub fn get_error_exposure() -> ErrorExposure {
+    match ERROR_EXPOSURE.load(Ordering::SeqCst) {
+        0 => ErrorExposure::Debug,
+        _ => ErrorExposure::Safe,
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ErrorId(pub Uuid);
@@ -18,8 +43,8 @@ impl Default for ErrorId {
     }
 }
 
-impl std::fmt::Display for ErrorId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ErrorId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -216,12 +241,66 @@ impl AppError {
         }
     }
 
+    pub fn safe_message(&self) -> Cow<'static, str> {
+        match self {
+            Self::NotFound => "The requested resource was not found".into(),
+            Self::ValidationError(_) => "The provided data failed validation".into(),
+            Self::AlreadyExists(_) => "The resource already exists".into(),
+            Self::InvalidJson(_) => "The request contains invalid data".into(),
+            Self::Unauthorized => "Authentication is required to access this resource".into(),
+            Self::Forbidden => "You do not have permission to perform this action".into(),
+            Self::RateLimited { retry_after } => format!(
+                "Rate limit exceeded. Please retry after {} seconds",
+                retry_after
+            )
+            .into(),
+            Self::ServiceUnavailable => {
+                "Service temporarily unavailable. Please try again later".into()
+            }
+            Self::NotImplemented => "This feature is not yet implemented".into(),
+            Self::InsufficientStock { .. } => {
+                "Insufficient stock available for this operation".into()
+            }
+            Self::ReservationNotFound => "Reservation not found or has expired".into(),
+            Self::ReservationExpired => "Reservation has expired".into(),
+            Self::ConcurrentModification => {
+                "Resource was modified by another process. Please retry".into()
+            }
+            Self::WarehouseNotFound(_) => "Warehouse not found".into(),
+            Self::InvalidWarehouseOperation(_) => "Invalid warehouse operation".into(),
+            Self::TransferNotFound(_) => "Transfer order not found".into(),
+            Self::BusinessRuleViolation(_) => "This operation violates business rules".into(),
+            Self::BackgroundJobError(_) => "Background processing error occurred".into(),
+            Self::DatabaseError(_) | Self::MigrationError(_) => {
+                "An internal error occurred. Please contact support if the problem persists".into()
+            }
+            Self::ConfigError(_) => "Service configuration error".into(),
+            Self::TransferError(e) => match e {
+                TransferError::InsufficientStock { .. } => {
+                    "Insufficient stock in source warehouse".into()
+                }
+                TransferError::SourceWarehouseNotFound(_) => "Source warehouse not found".into(),
+                TransferError::DestinationWarehouseNotFound(_) => {
+                    "Destination warehouse not found".into()
+                }
+                TransferError::TransferNotFound(_) => "Transfer order not found".into(),
+                TransferError::InvalidState { .. } => {
+                    "Transfer is in an invalid state for this operation".into()
+                }
+                TransferError::Database(_) => "An internal error occurred".into(),
+            },
+            Self::WithContext { source, .. } => source.safe_message(),
+        }
+    }
+
     pub fn documentation_url(&self) -> Option<String> {
-        let base = "https://docs.tuapi.com/errors";
+        let base = "https://docs.yourapi.com/errors";
         match self {
             Self::NotFound => Some(format!("{}/not-found", base)),
             Self::ValidationError(_) => Some(format!("{}/validation", base)),
             Self::RateLimited { .. } => Some(format!("{}/rate-limiting", base)),
+            Self::Unauthorized => Some(format!("{}/authentication", base)),
+            Self::Forbidden => Some(format!("{}/authorization", base)),
             _ => None,
         }
     }
@@ -270,8 +349,8 @@ impl AppError {
                             .map(|err| {
                                 err.message
                                     .as_ref()
-                                    .unwrap_or(&"Invalid value".into())
-                                    .to_string()
+                                    .map(|m| m.to_string())
+                                    .unwrap_or_else(|| "Invalid value".to_string())
                             })
                             .collect();
                         (field.to_string(), messages)
@@ -281,6 +360,16 @@ impl AppError {
                 serde_json::to_value(errors).ok()
             }
             Self::InvalidJson(msg) => Some(serde_json::json!({ "context": msg })),
+            Self::DatabaseError(_) | Self::MigrationError(_) => None,
+            Self::WithContext {
+                source, context, ..
+            } => {
+                let mut details = source.details().unwrap_or_else(|| serde_json::json!({}));
+                if let Some(obj) = details.as_object_mut() {
+                    obj.insert("context".to_string(), serde_json::json!(context));
+                }
+                Some(details)
+            }
             _ => None,
         }
     }
@@ -294,10 +383,82 @@ impl AppError {
                 Some("23503") => {
                     AppError::InvalidJson(format!("Foreign key violation in {}", resource))
                 }
+                Some("23514") => AppError::BusinessRuleViolation(format!(
+                    "Check constraint violation in {}",
+                    resource
+                )),
                 _ => AppError::DatabaseError(sqlx::Error::Database(db_err)),
             },
             _ => AppError::DatabaseError(e),
         }
+    }
+
+    pub fn log_error(&self, error_id: ErrorId) {
+        let chain = self.format_error_chain();
+        let exposure = get_error_exposure();
+
+        match self {
+            Self::WithContext {
+                source, context, ..
+            } => {
+                if self.status_code().is_server_error() {
+                    error!(
+                        error_id = %error_id,
+                        error_chain = %chain,
+                        immediate_context = %context,
+                        source_error = ?source,
+                        exposure = ?exposure,
+                        "Server error occurred with context"
+                    );
+                } else {
+                    warn!(
+                        error_id = %error_id,
+                        error_chain = %chain,
+                        immediate_context = %context,
+                        "Client error occurred with context"
+                    );
+                }
+            }
+            _ => {
+                if self.status_code().is_server_error() {
+                    error!(
+                        error_id = %error_id,
+                        error_type = ?std::mem::discriminant(self),
+                        error_message = %self.to_string(),
+                        "Server error occurred"
+                    );
+                } else {
+                    warn!(
+                        error_id = %error_id,
+                        error_type = ?std::mem::discriminant(self),
+                        "Client error occurred"
+                    );
+                }
+            }
+        }
+    }
+
+    fn format_error_chain(&self) -> String {
+        let mut parts = vec![];
+        let mut current: &AppError = self;
+
+        loop {
+            match current {
+                AppError::WithContext {
+                    source, context, ..
+                } => {
+                    parts.push(format!("[Context: {}]", context));
+                    current = source;
+                }
+                other => {
+                    parts.push(format!("[Root: {}]", other));
+                    break;
+                }
+            }
+        }
+
+        parts.reverse();
+        parts.join(" -> ")
     }
 }
 
@@ -306,29 +467,28 @@ impl IntoResponse for AppError {
         let error_id = self.error_id();
         let status = self.status_code();
 
-        let span = tracing::info_span!("error_handling", %error_id, status = %status);
-        let _enter = span.enter();
+        self.log_error(error_id);
 
-        if status.is_server_error() {
-            error!(
-                error = ?self,
-                error_id = %error_id,
-                "Internal server error occurred"
-            );
-        } else if status.is_client_error() {
-            warn!(
-                error = %self,
-                error_id = %error_id,
-                "Client error occurred"
-            );
-        }
+        let exposure = get_error_exposure();
+
+        let (message, details) = match exposure {
+            ErrorExposure::Debug => (self.to_string(), self.details()),
+            ErrorExposure::Safe => {
+                let safe_msg = self.safe_message().to_string();
+                let safe_details = match self {
+                    Self::ValidationError(_) => self.details(),
+                    _ => None,
+                };
+                (safe_msg, safe_details)
+            }
+        };
 
         let body = Json(ErrorResponseBody {
             error: ErrorPayload {
                 code: self.error_code(),
-                message: self.to_string(),
+                message,
                 error_id: error_id.to_string(),
-                details: self.details(),
+                details,
                 request_id: None,
                 documentation: self.documentation_url(),
                 timestamp: chrono::Utc::now().to_rfc3339(),
@@ -337,15 +497,15 @@ impl IntoResponse for AppError {
 
         let mut response = (status, body).into_response();
 
-        response.headers_mut().insert(
-            "X-Error-Id",
-            HeaderValue::from_str(&error_id.to_string()).unwrap(),
-        );
+        let error_id_header = HeaderValue::from_str(&error_id.to_string()).unwrap_or_else(|_| {
+            tracing::warn!("Failed to format error_id as header value");
+            HeaderValue::from_static("invalid-error-id")
+        });
+        response.headers_mut().insert("X-Error-Id", error_id_header);
 
         if let AppError::RateLimited { retry_after } = &self {
-            response
-                .headers_mut()
-                .insert("Retry-After", HeaderValue::from(*retry_after));
+            let retry_value = HeaderValue::from(*retry_after);
+            response.headers_mut().insert("Retry-After", retry_value);
         }
 
         response

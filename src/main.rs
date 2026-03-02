@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use automobile_inventory::error::{ErrorExposure, set_error_exposure};
+
 use axum::{extract::Request, middleware::Next, response::Response};
 use dotenvy::dotenv;
 use once_cell::sync::OnceCell;
@@ -95,6 +97,18 @@ async fn async_main(config: AppConfig) {
 
 async fn run_application(config: AppConfig) -> Result<(), AppError> {
     init_tracing(config.environment.as_str());
+
+    match config.environment {
+        automobile_inventory::config::EnvironmentType::Development
+        | automobile_inventory::config::EnvironmentType::Staging => {
+            set_error_exposure(ErrorExposure::Debug);
+            tracing::info!("Error exposure set to DEBUG mode");
+        }
+        _ => {
+            set_error_exposure(ErrorExposure::Safe);
+            tracing::info!("Error exposure set to SAFE mode (production)");
+        }
+    }
 
     tracing::info!(
         app_name = %config.app.name,
