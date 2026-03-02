@@ -90,13 +90,32 @@ impl CarRepository for PgCarRepository {
         sqlx::query_as::<_, CarEntity>(
             r#"
             INSERT INTO cars (
-                car_id, brand, model, year, color, engine_type, transmission, price,
-                quantity_in_stock, status
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING
-                car_id, brand, model, year, color, engine_type, transmission, price,
-                quantity_in_stock, status, created_at, updated_at, deleted_at
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
             "#,
         )
         .bind(dto.car_id)
@@ -121,10 +140,22 @@ impl CarRepository for PgCarRepository {
         sqlx::query_as::<_, CarEntity>(
             r#"
             SELECT
-                car_id, brand, model, year, color, engine_type, transmission, price,
-                quantity_in_stock, status, created_at, updated_at, deleted_at
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
             FROM cars
-            WHERE car_id = $1 AND deleted_at IS NULL
+            WHERE car_id = $1
+                AND deleted_at IS NULL
             "#,
         )
         .bind(id)
@@ -144,13 +175,25 @@ impl CarRepository for PgCarRepository {
         let (limit, offset, _, _) = pagination.normalize();
 
         let mut builder = QueryBuilder::new(
-            r#"SELECT
-                    car_id, brand, model, year, color, engine_type,
-                    transmission, price, quantity_in_stock, status,
-                    created_at, updated_at, deleted_at,
-                    COUNT(*) OVER() as total_count
-                FROM cars
-                WHERE deleted_at IS NULL"#,
+            r#"
+            SELECT
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at,
+                COUNT(*) OVER() AS total_count
+            FROM cars
+            WHERE deleted_at IS NULL
+            "#,
         );
 
         if let Some(brand) = &filter.brand {
@@ -190,10 +233,32 @@ impl CarRepository for PgCarRepository {
         let result = sqlx::query_as::<_, CarEntity>(
             r#"
             UPDATE cars
-            SET brand = $1, model = $2, year = $3, color = $4, engine_type = $5,
-                transmission = $6, price = $7, quantity_in_stock = $8, status = $9
-            WHERE car_id = $10 AND deleted_at IS NULL
-            RETURNING *
+            SET
+                brand = $1,
+                model = $2,
+                year = $3,
+                color = $4,
+                engine_type = $5,
+                transmission = $6,
+                price = $7,
+                quantity_in_stock = $8,
+                status = $9
+            WHERE car_id = $10
+                AND deleted_at IS NULL
+            RETURNING
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
             "#,
         )
         .bind(dto.brand)
@@ -221,12 +286,33 @@ impl CarRepository for PgCarRepository {
         let result = sqlx::query_as::<_, CarEntity>(
             r#"
             UPDATE cars
-            SET brand = $1, model = $2, year = $3, color = $4, engine_type = $5,
-                transmission = $6, price = $7, quantity_in_stock = $8, status = $9
+            SET
+                brand = $1,
+                model = $2,
+                year = $3,
+                color = $4,
+                engine_type = $5,
+                transmission = $6,
+                price = $7,
+                quantity_in_stock = $8,
+                status = $9
             WHERE car_id = $10
-              AND deleted_at IS NULL
-              AND version = $11
-            RETURNING *
+                AND deleted_at IS NULL
+                AND version = $11
+            RETURNING
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
             "#,
         )
         .bind(dto.brand)
@@ -255,12 +341,33 @@ impl CarRepository for PgCarRepository {
         let result = sqlx::query_as::<_, CarEntity>(
             r#"
             UPDATE cars
-            SET brand = $1, model = $2, year = $3, color = $4, engine_type = $5,
-                transmission = $6, price = $7, quantity_in_stock = $8, status = $9
+            SET
+                brand = $1,
+                model = $2,
+                year = $3,
+                color = $4,
+                engine_type = $5,
+                transmission = $6,
+                price = $7,
+                quantity_in_stock = $8,
+                status = $9
             WHERE car_id = $10
-              AND deleted_at IS NULL
-              AND version = $11
-            RETURNING *
+                AND deleted_at IS NULL
+                AND version = $11
+            RETURNING
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
             "#,
         )
         .bind(data.brand)
@@ -284,10 +391,32 @@ impl CarRepository for PgCarRepository {
         let result = sqlx::query_as::<_, CarEntity>(
             r#"
             UPDATE cars
-            SET brand = $1, model = $2, year = $3, color = $4, engine_type = $5,
-                transmission = $6, price = $7, quantity_in_stock = $8, status = $9
-            WHERE car_id = $10 AND deleted_at IS NULL
-            RETURNING *
+            SET
+                brand = $1,
+                model = $2,
+                year = $3,
+                color = $4,
+                engine_type = $5,
+                transmission = $6,
+                price = $7,
+                quantity_in_stock = $8,
+                status = $9
+            WHERE car_id = $10
+                AND deleted_at IS NULL
+            RETURNING
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
             "#,
         )
         .bind(data.brand)
@@ -308,9 +437,12 @@ impl CarRepository for PgCarRepository {
 
     async fn soft_delete(&self, id: &CarId) -> SqlxResult<()> {
         let result = sqlx::query(
-            "UPDATE cars
+            r#"
+            UPDATE cars
             SET deleted_at = NOW()
-            WHERE car_id = $1 AND deleted_at IS NULL",
+            WHERE car_id = $1
+                AND deleted_at IS NULL
+            "#,
         )
         .bind(id)
         .execute(&self.pool)
@@ -327,8 +459,8 @@ impl CarRepository for PgCarRepository {
             r#"
             SELECT
                 status,
-                COUNT(*) as total_units,
-                SUM(price * quantity_in_stock) as inventory_value
+                COUNT(*) AS total_units,
+                SUM(price * quantity_in_stock) AS inventory_value
             FROM cars
             WHERE deleted_at IS NULL
             GROUP BY status
@@ -341,7 +473,21 @@ impl CarRepository for PgCarRepository {
     async fn get_depreciation_report(&self) -> SqlxResult<Vec<CarEntity>> {
         sqlx::query_as::<_, CarEntity>(
             r#"
-            SELECT * FROM cars
+            SELECT
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            FROM cars
             WHERE year < EXTRACT(YEAR FROM CURRENT_DATE) - 5
                 AND status = 'Available'
                 AND deleted_at IS NULL
@@ -355,8 +501,23 @@ impl CarRepository for PgCarRepository {
     async fn get_low_stock_report(&self, threshold: i32) -> SqlxResult<Vec<CarEntity>> {
         sqlx::query_as::<_, CarEntity>(
             r#"
-            SELECT * FROM cars
-            WHERE quantity_in_stock < $1 AND deleted_at IS NULL
+            SELECT
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            FROM cars
+            WHERE quantity_in_stock < $1
+                AND deleted_at IS NULL
             ORDER BY quantity_in_stock ASC
             "#,
         )
@@ -372,13 +533,34 @@ impl CarRepository for PgCarRepository {
     ) -> SqlxResult<CarEntity> {
         sqlx::query_as::<_, CarEntity>(
             r#"
-                INSERT INTO cars (
-                    car_id, brand, model, year, color, engine_type, transmission, price,
-                    quantity_in_stock, status
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                RETURNING *
-                "#,
+            INSERT INTO cars (
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            RETURNING
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            "#,
         )
         .bind(&dto.car_id)
         .bind(&dto.brand)
@@ -402,13 +584,35 @@ impl CarRepository for PgCarRepository {
     ) -> SqlxResult<CarEntity> {
         sqlx::query_as::<_, CarEntity>(
             r#"
-                UPDATE cars
-                SET brand = $1, model = $2, year = $3, color = $4, engine_type = $5,
-                    transmission = $6, price = $7, quantity_in_stock = $8, status = $9,
-                    updated_at = NOW()
-                WHERE car_id = $10 AND deleted_at IS NULL
-                RETURNING *
-                "#,
+            UPDATE cars
+            SET
+                brand = $1,
+                model = $2,
+                year = $3,
+                color = $4,
+                engine_type = $5,
+                transmission = $6,
+                price = $7,
+                quantity_in_stock = $8,
+                status = $9,
+                updated_at = NOW()
+            WHERE car_id = $10
+                AND deleted_at IS NULL
+            RETURNING
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            "#,
         )
         .bind(&data.brand)
         .bind(&data.model)
@@ -432,10 +636,24 @@ impl CarRepository for PgCarRepository {
     ) -> SqlxResult<Option<CarEntity>> {
         sqlx::query_as::<_, CarEntity>(
             r#"
-                SELECT *
-                FROM cars
-                WHERE car_id = $1 AND deleted_at IS NULL
-                "#,
+            SELECT
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            FROM cars
+            WHERE car_id = $1
+                AND deleted_at IS NULL
+            "#,
         )
         .bind(&id)
         .fetch_optional(uow.connection())
@@ -451,19 +669,29 @@ impl CarRepository for PgCarRepository {
 
         let mut builder = QueryBuilder::new(
             r#"
-                SELECT
-                    car_id, brand, model, year, color, engine_type,
-                    transmission, price, quantity_in_stock, status,
-                    created_at, updated_at, deleted_at,
-                    ts_rank_cd(search_vector, query, 32) as rank,
-                    COUNT(*) OVER() as total_count
-                FROM cars,
-                LATERAL plainto_tsquery('simple', "#,
+            SELECT
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at,
+                ts_rank_cd(search_vector, query, 32) AS rank,
+                COUNT(*) OVER() AS total_count
+            FROM cars,
+            LATERAL plainto_tsquery('simple', "#,
         );
 
         let search_term = request.query.as_deref().unwrap_or("");
         builder.push_bind(search_term);
-        builder.push(") as query ");
+        builder.push(") AS query ");
 
         builder.push("WHERE deleted_at IS NULL AND search_vector @@ query ");
 
@@ -604,10 +832,39 @@ impl ReservationRepository for PgReservationRepository {
     ) -> Result<Reservation, sqlx::Error> {
         sqlx::query_as::<_, Reservation>(
             r#"
-            INSERT INTO reservations (id, car_id, quantity, reserved_by, expires_at, status, metadata, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 minute' * $5, 'Pending', $6, NOW(), NOW())
-            RETURNING *
-            "#
+            INSERT INTO reservations (
+                id,
+                car_id,
+                quantity,
+                reserved_by,
+                expires_at,
+                status,
+                metadata,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                NOW() + INTERVAL '1 minute' * $5,
+                'Pending',
+                $6,
+                NOW(),
+                NOW()
+            )
+            RETURNING
+                id,
+                car_id,
+                quantity,
+                reserved_by,
+                expires_at,
+                status,
+                metadata,
+                created_at,
+                updated_at
+            "#,
         )
         .bind(Uuid::new_v4())
         .bind(car_id)
@@ -622,10 +879,12 @@ impl ReservationRepository for PgReservationRepository {
     async fn get_reserved_quantity_for_car(&self, car_id: &CarId) -> Result<i64, sqlx::Error> {
         let result: Option<(i64,)> = sqlx::query_as(
             r#"
-                SELECT COALESCE(SUM(quantity), 0)
-                FROM reservations
-                WHERE car_id = $1 AND status = 'Pending' AND expires_at > NOW()
-                "#,
+            SELECT COALESCE(SUM(quantity), 0)
+            FROM reservations
+            WHERE car_id = $1
+                AND status = 'Pending'
+                AND expires_at > NOW()
+            "#,
         )
         .bind(car_id)
         .fetch_optional(&self.pool)
@@ -635,20 +894,47 @@ impl ReservationRepository for PgReservationRepository {
     }
 
     async fn find_reservation_by_id(&self, id: Uuid) -> Result<Option<Reservation>, sqlx::Error> {
-        sqlx::query_as::<_, Reservation>("SELECT * FROM reservations WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
+        sqlx::query_as::<_, Reservation>(
+            r#"
+            SELECT
+                id,
+                car_id,
+                quantity,
+                reserved_by,
+                expires_at,
+                status,
+                metadata,
+                created_at,
+                updated_at
+            FROM reservations
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
     }
 
     async fn confirm_reservation(&self, id: Uuid) -> Result<Reservation, sqlx::Error> {
         sqlx::query_as::<_, Reservation>(
             r#"
-                UPDATE reservations
-                SET status = 'Confirmed', updated_at = NOW()
-                WHERE id = $1 AND status = 'Pending'
-                RETURNING *
-                "#,
+            UPDATE reservations
+            SET
+                status = 'Confirmed',
+                updated_at = NOW()
+            WHERE id = $1
+                AND status = 'Pending'
+            RETURNING
+                id,
+                car_id,
+                quantity,
+                reserved_by,
+                expires_at,
+                status,
+                metadata,
+                created_at,
+                updated_at
+            "#,
         )
         .bind(id)
         .fetch_one(&self.pool)
@@ -657,7 +943,13 @@ impl ReservationRepository for PgReservationRepository {
 
     async fn cancel_reservation(&self, id: Uuid, _reason: Option<&str>) -> Result<(), sqlx::Error> {
         let result = sqlx::query(
-            "UPDATE reservations SET status = 'Cancelled', updated_at = NOW() WHERE id = $1",
+            r#"
+            UPDATE reservations
+            SET
+                status = 'Cancelled',
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
         )
         .bind(id)
         .execute(&self.pool)
@@ -676,11 +968,12 @@ impl ReservationRepository for PgReservationRepository {
     ) -> Result<(i32, i64), sqlx::Error> {
         let car_row: Option<(i32,)> = sqlx::query_as(
             r#"
-                SELECT quantity_in_stock
-                FROM cars
-                WHERE car_id = $1 AND deleted_at IS NULL
-                FOR UPDATE
-                "#,
+            SELECT quantity_in_stock
+            FROM cars
+            WHERE car_id = $1
+                AND deleted_at IS NULL
+            FOR UPDATE
+            "#,
         )
         .bind(car_id)
         .fetch_optional(&mut **tx)
@@ -690,10 +983,12 @@ impl ReservationRepository for PgReservationRepository {
 
         let reserved: Option<(i64,)> = sqlx::query_as(
             r#"
-                SELECT COALESCE(SUM(quantity), 0)
-                FROM reservations
-                WHERE car_id = $1 AND status = 'Pending' AND expires_at > NOW()
-                "#,
+            SELECT COALESCE(SUM(quantity), 0)
+            FROM reservations
+            WHERE car_id = $1
+                AND status = 'Pending'
+                AND expires_at > NOW()
+            "#,
         )
         .bind(car_id)
         .fetch_optional(&mut **tx)
@@ -714,20 +1009,49 @@ impl ReservationRepository for PgReservationRepository {
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<Reservation, sqlx::Error> {
         sqlx::query_as::<_, Reservation>(
-                r#"
-                INSERT INTO reservations (id, car_id, quantity, reserved_by, expires_at, status, metadata, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 minute' * $5, 'Pending', $6, NOW(), NOW())
-                RETURNING *
-                "#
+            r#"
+            INSERT INTO reservations (
+                id,
+                car_id,
+                quantity,
+                reserved_by,
+                expires_at,
+                status,
+                metadata,
+                created_at,
+                updated_at
             )
-            .bind(Uuid::new_v4())
-            .bind(car_id)
-            .bind(quantity)
-            .bind(reserved_by)
-            .bind(ttl_minutes as f64)
-            .bind(metadata)
-            .fetch_one(&mut **tx)
-            .await
+            VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                NOW() + INTERVAL '1 minute' * $5,
+                'Pending',
+                $6,
+                NOW(),
+                NOW()
+            )
+            RETURNING
+                id,
+                car_id,
+                quantity,
+                reserved_by,
+                expires_at,
+                status,
+                metadata,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(car_id)
+        .bind(quantity)
+        .bind(reserved_by)
+        .bind(ttl_minutes as f64)
+        .bind(metadata)
+        .fetch_one(&mut **tx)
+        .await
     }
 
     async fn execute_reservation_atomic(
@@ -784,20 +1108,21 @@ impl ReservationRepository for PgReservationRepository {
     ) -> Result<Reservation, ReservationError> {
         let (total_stock, reserved): (i32, i64) = sqlx::query_as(
             r#"
-                SELECT
-                    c.quantity_in_stock,
-                    COALESCE((
-                        SELECT SUM(r.quantity)
-                        FROM reservations r
-                        WHERE r.car_id = $1
+            SELECT
+                c.quantity_in_stock,
+                COALESCE((
+                    SELECT SUM(r.quantity)
+                    FROM reservations r
+                    WHERE r.car_id = $1
                         AND r.status = 'Pending'
                         AND r.expires_at > NOW()
-                        FOR UPDATE
-                    ), 0)
-                FROM cars c
-                WHERE c.car_id = $1 AND c.deleted_at IS NULL
-                FOR UPDATE
-                "#,
+                    FOR UPDATE
+                ), 0)
+            FROM cars c
+            WHERE c.car_id = $1
+                AND c.deleted_at IS NULL
+            FOR UPDATE
+            "#,
         )
         .bind(car_id)
         .fetch_one(uow.connection())
@@ -817,24 +1142,50 @@ impl ReservationRepository for PgReservationRepository {
         }
 
         let reservation = sqlx::query_as::<_, Reservation>(
-                r#"
-                INSERT INTO reservations (
-                    id, car_id, quantity, reserved_by,
-                    expires_at, status, metadata, created_at, updated_at
-                )
-                VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 minute' * $5, 'Pending', $6, NOW(), NOW())
-                RETURNING *
-                "#
+            r#"
+            INSERT INTO reservations (
+                id,
+                car_id,
+                quantity,
+                reserved_by,
+                expires_at,
+                status,
+                metadata,
+                created_at,
+                updated_at
             )
-            .bind(Uuid::new_v4())
-            .bind(car_id)
-            .bind(dto.quantity)
-            .bind(&dto.reserved_by)
-            .bind(dto.ttl_minutes as f64)
-            .bind(&dto.metadata)
-            .fetch_one(uow.connection())
-            .await
-            .map_err(ReservationError::Database)?;
+            VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                NOW() + INTERVAL '1 minute' * $5,
+                'Pending',
+                $6,
+                NOW(),
+                NOW()
+            )
+            RETURNING
+                id,
+                car_id,
+                quantity,
+                reserved_by,
+                expires_at,
+                status,
+                metadata,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(car_id)
+        .bind(dto.quantity)
+        .bind(&dto.reserved_by)
+        .bind(dto.ttl_minutes as f64)
+        .bind(&dto.metadata)
+        .fetch_one(uow.connection())
+        .await
+        .map_err(ReservationError::Database)?;
 
         Ok(reservation)
     }
@@ -846,11 +1197,24 @@ impl ReservationRepository for PgReservationRepository {
     ) -> Result<Reservation, ReservationError> {
         let reservation = sqlx::query_as::<_, Reservation>(
             r#"
-                UPDATE reservations
-                SET status = 'Confirmed', updated_at = NOW()
-                WHERE id = $1 AND status = 'Pending' AND expires_at > NOW()
-                RETURNING *
-                "#,
+            UPDATE reservations
+            SET
+                status = 'Confirmed',
+                updated_at = NOW()
+            WHERE id = $1
+                AND status = 'Pending'
+                AND expires_at > NOW()
+            RETURNING
+                id,
+                car_id,
+                quantity,
+                reserved_by,
+                expires_at,
+                status,
+                metadata,
+                created_at,
+                updated_at
+            "#,
         )
         .bind(reservation_id)
         .fetch_optional(uow.connection())
@@ -951,19 +1315,28 @@ impl WarehouseRepository for PgWarehouseRepository {
     ) -> Result<Warehouse, sqlx::Error> {
         sqlx::query_as::<_, Warehouse>(
             r#"
-                INSERT INTO warehouses (
-                    warehouse_id,
-                    name,
-                    location,
-                    latitude,
-                    longitude,
-                    capacity_total,
-                    capacity_used,
-                    is_active
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, 0, true)
-                RETURNING *
-                "#,
+            INSERT INTO warehouses (
+                warehouse_id,
+                name,
+                location,
+                latitude,
+                longitude,
+                capacity_total,
+                capacity_used,
+                is_active
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, 0, true)
+            RETURNING
+                warehouse_id,
+                name,
+                location,
+                latitude,
+                longitude,
+                capacity_total,
+                capacity_used,
+                is_active,
+                created_at
+            "#,
         )
         .bind(&id)
         .bind(name)
@@ -977,7 +1350,21 @@ impl WarehouseRepository for PgWarehouseRepository {
 
     async fn list_warehouses(&self) -> Result<Vec<Warehouse>, sqlx::Error> {
         sqlx::query_as::<_, Warehouse>(
-            "SELECT * FROM warehouses WHERE is_active = true ORDER BY name",
+            r#"
+            SELECT
+                warehouse_id,
+                name,
+                location,
+                latitude,
+                longitude,
+                capacity_total,
+                capacity_used,
+                is_active,
+                created_at
+            FROM warehouses
+            WHERE is_active = true
+            ORDER BY name
+            "#,
         )
         .fetch_all(&self.pool)
         .await
@@ -987,10 +1374,25 @@ impl WarehouseRepository for PgWarehouseRepository {
         &self,
         id: &WarehouseId,
     ) -> Result<Option<Warehouse>, sqlx::Error> {
-        sqlx::query_as::<_, Warehouse>("SELECT * FROM warehouses WHERE warehouse_id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
+        sqlx::query_as::<_, Warehouse>(
+            r#"
+            SELECT
+                warehouse_id,
+                name,
+                location,
+                latitude,
+                longitude,
+                capacity_total,
+                capacity_used,
+                is_active,
+                created_at
+            FROM warehouses
+            WHERE warehouse_id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
     }
 
     async fn transfer_stock(
@@ -1003,7 +1405,19 @@ impl WarehouseRepository for PgWarehouseRepository {
         let mut tx = self.pool.begin().await?;
 
         let source: Option<StockLocation> = sqlx::query_as(
-            "SELECT * FROM stock_locations WHERE warehouse_id = $1 AND car_id = $2 FOR UPDATE",
+            r#"
+            SELECT
+                warehouse_id,
+                car_id,
+                zone,
+                quantity,
+                reserved_quantity,
+                last_updated
+            FROM stock_locations
+            WHERE warehouse_id = $1
+                AND car_id = $2
+            FOR UPDATE
+            "#,
         )
         .bind(from)
         .bind(car_id)
@@ -1018,25 +1432,43 @@ impl WarehouseRepository for PgWarehouseRepository {
         }
 
         let transfer = sqlx::query_as::<_, TransferOrder>(
-                r#"
-                INSERT INTO transfer_orders
-                    (transfer_id, from_warehouse_id, to_warehouse_id, car_id, quantity, status, requested_at)
-                VALUES ($1, $2, $3, $4, $5, 'Pending', NOW())
-                RETURNING *
-                "#
+            r#"
+            INSERT INTO transfer_orders (
+                transfer_id,
+                from_warehouse_id,
+                to_warehouse_id,
+                car_id,
+                quantity,
+                status,
+                requested_at
             )
-            .bind(Uuid::new_v4())
-            .bind(from)
-            .bind(to)
-            .bind(car_id)
-            .bind(quantity)
-            .fetch_one(&mut *tx)
-            .await?;
+            VALUES ($1, $2, $3, $4, $5, 'Pending', NOW())
+            RETURNING
+                transfer_id,
+                from_warehouse_id,
+                to_warehouse_id,
+                car_id,
+                quantity,
+                status,
+                requested_at,
+                completed_at
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(from)
+        .bind(to)
+        .bind(car_id)
+        .bind(quantity)
+        .fetch_one(&mut *tx)
+        .await?;
 
         sqlx::query(
-            "UPDATE stock_locations
-                 SET quantity = quantity - $1
-                 WHERE warehouse_id = $2 AND car_id = $3",
+            r#"
+            UPDATE stock_locations
+            SET quantity = quantity - $1
+            WHERE warehouse_id = $2
+                AND car_id = $3
+            "#,
         )
         .bind(quantity)
         .bind(from)
@@ -1058,7 +1490,14 @@ impl WarehouseRepository for PgWarehouseRepository {
         let mut tx = self.pool.begin().await?;
 
         let source_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM warehouses WHERE warehouse_id = $1 AND is_active = true)",
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM warehouses
+                WHERE warehouse_id = $1
+                    AND is_active = true
+            )
+            "#,
         )
         .bind(from)
         .fetch_one(&mut *tx)
@@ -1069,7 +1508,14 @@ impl WarehouseRepository for PgWarehouseRepository {
         }
 
         let dest_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM warehouses WHERE warehouse_id = $1 AND is_active = true)",
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM warehouses
+                WHERE warehouse_id = $1
+                    AND is_active = true
+            )
+            "#,
         )
         .bind(to)
         .fetch_one(&mut *tx)
@@ -1081,56 +1527,76 @@ impl WarehouseRepository for PgWarehouseRepository {
 
         let transfer_result = sqlx::query_as::<_, TransferOrder>(
             r#"
-                WITH source_stock AS (
-                    SELECT quantity, reserved_quantity
-                    FROM stock_locations
-                    WHERE warehouse_id = $1 AND car_id = $2
-                    FOR UPDATE
-                ),
-                validation AS (
-                    SELECT
-                        CASE
-                            WHEN (quantity - reserved_quantity) >= $3 THEN true
-                            ELSE false
-                        END as has_sufficient_stock,
-                        quantity - reserved_quantity as available_qty
-                    FROM source_stock
-                ),
-                create_transfer AS (
-                    INSERT INTO transfer_orders (
-                        transfer_id, from_warehouse_id, to_warehouse_id,
-                        car_id, quantity, status, requested_at
-                    )
-                    SELECT $4, $1, $5, $2, $3, 'InTransit', NOW()
-                    FROM validation
-                    WHERE has_sufficient_stock = true
-                    RETURNING *
-                ),
-                update_source AS (
-                    UPDATE stock_locations
-                    SET
-                        quantity = quantity - $3,
-                        last_updated = NOW()
-                    WHERE warehouse_id = $1
-                      AND car_id = $2
-                      AND EXISTS (SELECT 1 FROM create_transfer)
-                    RETURNING warehouse_id
-                ),
-                upsert_destination AS (
-                    INSERT INTO stock_locations (
-                        warehouse_id, car_id, zone, quantity,
-                        reserved_quantity, last_updated
-                    )
-                    SELECT $5, $2, 'RECEIVING', $3, 0, NOW()
-                    FROM create_transfer
-                    ON CONFLICT (warehouse_id, car_id)
-                    DO UPDATE SET
-                        quantity = stock_locations.quantity + EXCLUDED.quantity,
-                        last_updated = NOW()
-                    RETURNING warehouse_id
+            WITH source_stock AS (
+                SELECT
+                    quantity,
+                    reserved_quantity
+                FROM stock_locations
+                WHERE warehouse_id = $1
+                    AND car_id = $2
+                FOR UPDATE
+            ),
+            validation AS (
+                SELECT
+                    CASE
+                        WHEN (quantity - reserved_quantity) >= $3 THEN true
+                        ELSE false
+                    END AS has_sufficient_stock,
+                    quantity - reserved_quantity AS available_qty
+                FROM source_stock
+            ),
+            create_transfer AS (
+                INSERT INTO transfer_orders (
+                    transfer_id,
+                    from_warehouse_id,
+                    to_warehouse_id,
+                    car_id,
+                    quantity,
+                    status,
+                    requested_at
                 )
-                SELECT * FROM create_transfer
-                "#,
+                SELECT $4, $1, $5, $2, $3, 'InTransit', NOW()
+                FROM validation
+                WHERE has_sufficient_stock = true
+                RETURNING
+                    transfer_id,
+                    from_warehouse_id,
+                    to_warehouse_id,
+                    car_id,
+                    quantity,
+                    status,
+                    requested_at,
+                    completed_at
+            ),
+            update_source AS (
+                UPDATE stock_locations
+                SET
+                    quantity = quantity - $3,
+                    last_updated = NOW()
+                WHERE warehouse_id = $1
+                    AND car_id = $2
+                    AND EXISTS (SELECT 1 FROM create_transfer)
+                RETURNING warehouse_id
+            ),
+            upsert_destination AS (
+                INSERT INTO stock_locations (
+                    warehouse_id,
+                    car_id,
+                    zone,
+                    quantity,
+                    reserved_quantity,
+                    last_updated
+                )
+                SELECT $5, $2, 'RECEIVING', $3, 0, NOW()
+                FROM create_transfer
+                ON CONFLICT (warehouse_id, car_id)
+                DO UPDATE SET
+                    quantity = stock_locations.quantity + EXCLUDED.quantity,
+                    last_updated = NOW()
+                RETURNING warehouse_id
+            )
+            SELECT * FROM create_transfer
+            "#,
         )
         .bind(from)
         .bind(car_id)
@@ -1145,10 +1611,11 @@ impl WarehouseRepository for PgWarehouseRepository {
             None => {
                 let available: Option<(i32,)> = sqlx::query_as(
                     r#"
-                        SELECT COALESCE(quantity - reserved_quantity, 0)
-                        FROM stock_locations
-                        WHERE warehouse_id = $1 AND car_id = $2
-                        "#,
+                    SELECT COALESCE(quantity - reserved_quantity, 0)
+                    FROM stock_locations
+                    WHERE warehouse_id = $1
+                        AND car_id = $2
+                    "#,
                 )
                 .bind(from)
                 .bind(car_id)
@@ -1174,11 +1641,25 @@ impl WarehouseRepository for PgWarehouseRepository {
     async fn complete_transfer(&self, transfer_id: Uuid) -> Result<TransferOrder, TransferError> {
         let mut tx = self.pool.begin().await?;
 
-        let transfer: Option<TransferOrder> =
-            sqlx::query_as("SELECT * FROM transfer_orders WHERE transfer_id = $1 FOR UPDATE")
-                .bind(transfer_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let transfer: Option<TransferOrder> = sqlx::query_as(
+            r#"
+            SELECT
+                transfer_id,
+                from_warehouse_id,
+                to_warehouse_id,
+                car_id,
+                quantity,
+                status,
+                requested_at,
+                completed_at
+            FROM transfer_orders
+            WHERE transfer_id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(transfer_id)
+        .fetch_optional(&mut *tx)
+        .await?;
 
         let transfer = transfer.ok_or(TransferError::TransferNotFound(transfer_id))?;
 
@@ -1191,11 +1672,21 @@ impl WarehouseRepository for PgWarehouseRepository {
 
         let completed = sqlx::query_as::<_, TransferOrder>(
             r#"
-                UPDATE transfer_orders
-                SET status = 'Completed', completed_at = NOW()
-                WHERE transfer_id = $1
-                RETURNING *
-                "#,
+            UPDATE transfer_orders
+            SET
+                status = 'Completed',
+                completed_at = NOW()
+            WHERE transfer_id = $1
+            RETURNING
+                transfer_id,
+                from_warehouse_id,
+                to_warehouse_id,
+                car_id,
+                quantity,
+                status,
+                requested_at,
+                completed_at
+            "#,
         )
         .bind(transfer_id)
         .fetch_one(&mut *tx)
@@ -1210,10 +1701,24 @@ impl WarehouseRepository for PgWarehouseRepository {
         &self,
         transfer_id: Uuid,
     ) -> Result<Option<TransferOrder>, sqlx::Error> {
-        sqlx::query_as::<_, TransferOrder>("SELECT * FROM transfer_orders WHERE transfer_id = $1")
-            .bind(transfer_id)
-            .fetch_optional(&self.pool)
-            .await
+        sqlx::query_as::<_, TransferOrder>(
+            r#"
+            SELECT
+                transfer_id,
+                from_warehouse_id,
+                to_warehouse_id,
+                car_id,
+                quantity,
+                status,
+                requested_at,
+                completed_at
+            FROM transfer_orders
+            WHERE transfer_id = $1
+            "#,
+        )
+        .bind(transfer_id)
+        .fetch_optional(&self.pool)
+        .await
     }
 }
 
@@ -1238,110 +1743,112 @@ impl PgInventoryAnalyticsRepository {
 impl InventoryAnalyticsRepository for PgInventoryAnalyticsRepository {
     async fn get_stock_alerts(&self) -> Result<Vec<StockAlertRow>, sqlx::Error> {
         sqlx::query_as::<_, StockAlertRow>(
-                r#"
-                WITH sales_stats AS (
-                    SELECT
-                        car_id,
-                        COALESCE(AVG(quantity), 0) as avg_daily_sales,
-                        COALESCE(STDDEV(quantity), 0) as sales_volatility,
-                        COUNT(*) as total_sales
-                    FROM sales_history
-                    WHERE sold_at > NOW() - INTERVAL '30 days'
-                    GROUP BY car_id
-                ),
-                reserved_stats AS (
-                    SELECT
-                        car_id,
-                        COALESCE(SUM(quantity), 0) as reserved_qty
-                    FROM reservations
-                    WHERE status = 'Pending' AND expires_at > NOW()
-                    GROUP BY car_id
-                )
+            r#"
+            WITH sales_stats AS (
                 SELECT
-                    c.car_id,
-                    c.brand,
-                    c.model,
-                    c.quantity_in_stock as current_stock,
-                    COALESCE(r.reserved_qty, 0) as reserved_stock,
-                    (c.quantity_in_stock - COALESCE(r.reserved_qty, 0)::int) as available_stock,
-                    c.reorder_point,
-                    c.economic_order_qty,
-                    CASE
-                        WHEN c.quantity_in_stock <= c.reorder_point THEN 'Critical'::alert_level
-                        WHEN c.quantity_in_stock <= c.reorder_point * 1.5 THEN 'Warning'::alert_level
-                        ELSE 'Ok'::alert_level
-                    END as alert_level,
-                    CASE
-                        WHEN s.avg_daily_sales > 0 THEN 'UP'
-                        ELSE 'STABLE'
-                    END as trend_direction,
-                    10.0 as trend_percentage,  -- Simplificado
-                    s.avg_daily_sales,
-                    CASE
-                        WHEN s.avg_daily_sales > 0
-                        THEN ((c.quantity_in_stock - COALESCE(r.reserved_qty, 0)::int) / s.avg_daily_sales)::int
-                        ELSE NULL
-                    END as days_until_stockout,
-                    'Reorder' as suggested_action_type,
-                    'Stock below reorder point' as suggested_description,
-                    1 as suggested_priority
-                FROM cars c
-                LEFT JOIN sales_stats s ON c.car_id = s.car_id
-                LEFT JOIN reserved_stats r ON c.car_id = r.car_id
-                WHERE c.deleted_at IS NULL
-                AND c.quantity_in_stock <= c.reorder_point * 1.5
-                ORDER BY alert_level DESC, c.quantity_in_stock ASC
-                "#
+                    car_id,
+                    COALESCE(AVG(quantity), 0) AS avg_daily_sales,
+                    COALESCE(STDDEV(quantity), 0) AS sales_volatility,
+                    COUNT(*) AS total_sales
+                FROM sales_history
+                WHERE sold_at > NOW() - INTERVAL '30 days'
+                GROUP BY car_id
+            ),
+            reserved_stats AS (
+                SELECT
+                    car_id,
+                    COALESCE(SUM(quantity), 0) AS reserved_qty
+                FROM reservations
+                WHERE status = 'Pending'
+                    AND expires_at > NOW()
+                GROUP BY car_id
             )
-            .fetch_all(&self.pool)
-            .await
+            SELECT
+                c.car_id,
+                c.brand,
+                c.model,
+                c.quantity_in_stock AS current_stock,
+                COALESCE(r.reserved_qty, 0) AS reserved_stock,
+                (c.quantity_in_stock - COALESCE(r.reserved_qty, 0)::int) AS available_stock,
+                c.reorder_point,
+                c.economic_order_qty,
+                CASE
+                    WHEN c.quantity_in_stock <= c.reorder_point THEN 'Critical'::alert_level
+                    WHEN c.quantity_in_stock <= c.reorder_point * 1.5 THEN 'Warning'::alert_level
+                    ELSE 'Ok'::alert_level
+                END AS alert_level,
+                CASE
+                    WHEN s.avg_daily_sales > 0 THEN 'UP'
+                    ELSE 'STABLE'
+                END AS trend_direction,
+                10.0 AS trend_percentage,
+                s.avg_daily_sales,
+                CASE
+                    WHEN s.avg_daily_sales > 0
+                    THEN ((c.quantity_in_stock - COALESCE(r.reserved_qty, 0)::int) / s.avg_daily_sales)::int
+                    ELSE NULL
+                END AS days_until_stockout,
+                'Reorder' AS suggested_action_type,
+                'Stock below reorder point' AS suggested_description,
+                1 AS suggested_priority
+            FROM cars c
+            LEFT JOIN sales_stats s ON c.car_id = s.car_id
+            LEFT JOIN reserved_stats r ON c.car_id = r.car_id
+            WHERE c.deleted_at IS NULL
+                AND c.quantity_in_stock <= c.reorder_point * 1.5
+            ORDER BY alert_level DESC, c.quantity_in_stock ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
     }
 
     async fn get_sales_velocity(&self, days: i32) -> Result<Vec<SalesVelocity>, sqlx::Error> {
         sqlx::query_as::<_, SalesVelocity>(
-                r#"
-                SELECT
-                    c.car_id,
-                    c.brand,
-                    c.model,
-                    COALESCE(AVG(s.quantity), 0) / $1 as avg_daily_sales,
-                    COALESCE(STDDEV(s.quantity), 0) as sales_volatility,
-                    COUNT(*) FILTER (WHERE s.sold_at > NOW() - INTERVAL '30 days') as last_30_days_sales,
-                    COUNT(*) FILTER (WHERE s.sold_at > NOW() - INTERVAL '7 days') as last_7_days_sales,
-                    CASE
-                        WHEN AVG(s.quantity) FILTER (WHERE s.sold_at > NOW() - INTERVAL '7 days') >
-                             AVG(s.quantity) FILTER (WHERE s.sold_at <= NOW() - INTERVAL '7 days' AND s.sold_at > NOW() - INTERVAL '14 days')
-                        THEN 'UP'
-                        ELSE 'DOWN'
-                    END as trend_direction
-                FROM cars c
-                LEFT JOIN sales_history s ON c.car_id = s.car_id AND s.sold_at > NOW() - INTERVAL '30 days'
-                WHERE c.deleted_at IS NULL
-                GROUP BY c.car_id, c.brand, c.model
-                HAVING COUNT(s.*) > 0
-                ORDER BY avg_daily_sales DESC
-                "#
-            )
-            .bind(days as f64)
-            .fetch_all(&self.pool)
-            .await
+            r#"
+            SELECT
+                c.car_id,
+                c.brand,
+                c.model,
+                COALESCE(AVG(s.quantity), 0) / $1 AS avg_daily_sales,
+                COALESCE(STDDEV(s.quantity), 0) AS sales_volatility,
+                COUNT(*) FILTER (WHERE s.sold_at > NOW() - INTERVAL '30 days') AS last_30_days_sales,
+                COUNT(*) FILTER (WHERE s.sold_at > NOW() - INTERVAL '7 days') AS last_7_days_sales,
+                CASE
+                    WHEN AVG(s.quantity) FILTER (WHERE s.sold_at > NOW() - INTERVAL '7 days') >
+                         AVG(s.quantity) FILTER (WHERE s.sold_at <= NOW() - INTERVAL '7 days' AND s.sold_at > NOW() - INTERVAL '14 days')
+                    THEN 'UP'
+                    ELSE 'DOWN'
+                END AS trend_direction
+            FROM cars c
+            LEFT JOIN sales_history s ON c.car_id = s.car_id
+                AND s.sold_at > NOW() - INTERVAL '30 days'
+            WHERE c.deleted_at IS NULL
+            GROUP BY c.car_id, c.brand, c.model
+            HAVING COUNT(s.*) > 0
+            ORDER BY avg_daily_sales DESC
+            "#,
+        )
+        .bind(days as f64)
+        .fetch_all(&self.pool)
+        .await
     }
 
     async fn get_inventory_metrics(&self) -> Result<InventoryMetrics, sqlx::Error> {
         let row: (i64, Option<BigDecimal>, i64, i64, i64, i64) = sqlx::query_as(
             r#"
-                SELECT
-                    COUNT(DISTINCT c.car_id),
-                    SUM(c.price * c.quantity_in_stock),
-                    COUNT(DISTINCT w.warehouse_id),
-                    COUNT(DISTINCT r.id) FILTER (WHERE r.status = 'Pending'),
-                    COALESCE(SUM(r.quantity) FILTER (WHERE r.status = 'Pending'), 0),
-                    COUNT(DISTINCT c.car_id) FILTER (WHERE c.quantity_in_stock <= c.reorder_point)
-                FROM cars c
-                CROSS JOIN warehouses w
-                LEFT JOIN reservations r ON c.car_id = r.car_id
-                WHERE c.deleted_at IS NULL
-                "#,
+            SELECT
+                COUNT(DISTINCT c.car_id),
+                SUM(c.price * c.quantity_in_stock),
+                COUNT(DISTINCT w.warehouse_id),
+                COUNT(DISTINCT r.id) FILTER (WHERE r.status = 'Pending'),
+                COALESCE(SUM(r.quantity) FILTER (WHERE r.status = 'Pending'), 0),
+                COUNT(DISTINCT c.car_id) FILTER (WHERE c.quantity_in_stock <= c.reorder_point)
+            FROM cars c
+            CROSS JOIN warehouses w
+            LEFT JOIN reservations r ON c.car_id = r.car_id
+            WHERE c.deleted_at IS NULL
+            "#,
         )
         .fetch_one(&self.pool)
         .await?;
@@ -1387,7 +1894,12 @@ impl SalesRepository for PgSalesRepository {
         sqlx::query(
             r#"
             INSERT INTO sales_history (
-                id, car_id, quantity, sale_price, customer_id, sold_at
+                id,
+                car_id,
+                quantity,
+                sale_price,
+                customer_id,
+                sold_at
             )
             VALUES ($1, $2, $3, $4, $5, NOW())
             "#,
