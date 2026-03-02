@@ -21,6 +21,7 @@ use tracing::warn;
 
 use automobile_inventory::{
     background::BackgroundWorker,
+    circuit_breaker::{CircuitBreaker, CircuitBreakerConfig},
     config::{AppConfig, create_cors_layer, load_config},
     error::AppError,
     middleware::request_context_middleware,
@@ -136,6 +137,15 @@ async fn run_application(config: AppConfig) -> Result<(), AppError> {
         .await
         .map_err(AppError::MigrationError)?;
 
+    let db_circuit_breaker = Arc::new(CircuitBreaker::with_config(
+        "database_operations",
+        CircuitBreakerConfig::default(),
+    ));
+    tracing::info!(
+        circuit_breaker = "database_operations",
+        "Circuit breaker initialized"
+    );
+
     let car_repo = Arc::new(PgCarRepository::new(pool.clone()));
     let reservation_repo = Arc::new(PgReservationRepository::new(pool.clone()));
     let warehouse_repo = Arc::new(PgWarehouseRepository::new(pool.clone()));
@@ -157,6 +167,7 @@ async fn run_application(config: AppConfig) -> Result<(), AppError> {
         inventory_analytics_service,
         config: config.clone(),
         start_time: std::time::Instant::now(),
+        db_circuit_breaker,
     };
 
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);

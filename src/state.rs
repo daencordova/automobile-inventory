@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::circuit_breaker::CircuitBreaker;
 use crate::config::AppConfig;
 use crate::services::{
     CarService, HealthCheckService, InventoryAnalyticsService, ReservationService, WarehouseService,
@@ -15,4 +16,5 @@ pub struct AppState {
     pub inventory_analytics_service: Arc<InventoryAnalyticsService>,
     pub config: AppConfig,
     pub start_time: Instant,
+    pub db_circuit_breaker: Arc<CircuitBreaker>,
 }
