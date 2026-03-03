@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use crate::circuit_breaker::CircuitBreaker;
 use crate::config::AppConfig;
+use crate::pool_manager::PoolManager;
 use crate::services::{
     CarService, HealthCheckService, InventoryAnalyticsService, ReservationService, WarehouseService,
 };
@@ -17,4 +18,5 @@ pub struct AppState {
     pub config: AppConfig,
     pub start_time: Instant,
     pub db_circuit_breaker: Arc<CircuitBreaker>,
+    pub pool_manager: Option<Arc<PoolManager>>,
 }

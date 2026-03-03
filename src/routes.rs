@@ -58,6 +58,7 @@ use crate::state::AppState;
         crate::handlers::health_check_handler,
         crate::handlers::circuit_breaker_health_handler,
         crate::handlers::cache_metrics_handler,
+        crate::handlers::pool_metrics_handler,
     ),
     components(
         schemas(
@@ -171,6 +172,7 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::circuit_breaker_health_handler),
         )
         .route("/health/cache", get(handlers::cache_metrics_handler))
+        .route("/health/pool", get(handlers::pool_metrics_handler))
         .nest("/api/v1", v1_routes)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(outer_layers)

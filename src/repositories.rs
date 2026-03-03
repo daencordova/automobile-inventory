@@ -779,15 +779,6 @@ impl CarCommandRepository for PgCarRepository {
     }
 }
 
-// pub struct PgCarRepository {
-//     pool: PgPool,
-// }
-
-// #[async_trait]
-// impl CarRepository for PgCarRepository {
-
-// }
-
 #[async_trait]
 pub trait ReservationRepository: Send + Sync {
     async fn create_reservation(

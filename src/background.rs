@@ -331,14 +331,6 @@ impl BackgroundWorker {
         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
     }
 
-    // #[deprecated(
-    //     since = "0.4.0",
-    //     note = "Use process_expired_reservations_batched instead"
-    // )]
-    // async fn process_expired_reservations(&self) -> Result<(), crate::error::AppError> {
-    //     self.process_expired_reservations_batched().await
-    // }
-
     async fn update_inventory_metrics(&self) -> Result<(), crate::error::AppError> {
         let start = Instant::now();
 

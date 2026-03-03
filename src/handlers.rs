@@ -115,6 +115,42 @@ pub async fn cache_metrics_handler(State(state): State<AppState>) -> impl IntoRe
 }
 
 #[utoipa::path(
+    get,
+    path = "/health/pool",
+    responses(
+        (status = 200, description = "Pool metrics", body = serde_json::Value)
+    ),
+    tag = "System"
+)]
+pub async fn pool_metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let metrics = match &state.pool_manager {
+        Some(manager) => manager.metrics().await,
+        None => {
+            return Json(serde_json::json!({
+                "error": "Pool manager not available"
+            }));
+        }
+    };
+
+    let response = serde_json::json!({
+        "pool": {
+            "size": metrics.size,
+            "active": metrics.active,
+            "idle": metrics.idle,
+            "min_connections": metrics.min_connections,
+            "max_connections": metrics.max_connections,
+            "usage_percent": format!("{:.2}%", metrics.usage_percent * 100.0),
+            "wait_time_ms": metrics.wait_time_ms,
+            "health_check_failures": metrics.health_check_failures,
+            "total_acquires": metrics.total_acquires,
+            "slow_acquires": metrics.slow_acquires,
+        }
+    });
+
+    Json(response)
+}
+
+#[utoipa::path(
     post,
     path = "/api/v1/cars",
     request_body = CreateCarDto,

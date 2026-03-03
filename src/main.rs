@@ -7,13 +7,9 @@ use std::{
     },
 };
 
-use automobile_inventory::error::{ErrorExposure, set_error_exposure};
-
 use axum::{extract::Request, middleware::Next, response::Response};
 use dotenvy::dotenv;
 use once_cell::sync::OnceCell;
-use secrecy::ExposeSecret;
-use sqlx::postgres::PgPoolOptions;
 use tokio::sync::{mpsc, watch};
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
@@ -23,12 +19,13 @@ use automobile_inventory::{
     background::BackgroundWorker,
     circuit_breaker::{CircuitBreaker, CircuitBreakerConfig},
     config::{AppConfig, create_cors_layer, load_config},
-    error::AppError,
+    error::{AppError, ErrorExposure, set_error_exposure},
     middleware::request_context_middleware,
     observability::init_tracing,
+    pool_manager::{DynamicPoolConfig, PoolBuilder},
     repositories::{
-        PgCarCommandRepository, PgCarQueryRepository, PgInventoryAnalyticsRepository,
-        PgReservationRepository, PgWarehouseRepository,
+        PgCarCommandRepository, PgCarQueryRepository, PgCarRepository,
+        PgInventoryAnalyticsRepository, PgReservationRepository, PgWarehouseRepository,
     },
     routes::create_router,
     services::{
@@ -120,17 +117,34 @@ async fn run_application(config: AppConfig) -> Result<(), AppError> {
 
     let cors_layer = create_cors_layer(&config.cors)?;
 
-    let pool = PgPoolOptions::new()
-        .max_connections(config.database.max_connections)
-        .min_connections(config.database.min_connections)
-        .acquire_timeout(config.database.acquire_timeout())
-        .max_lifetime(config.database.max_lifetime())
-        .idle_timeout(config.database.idle_timeout())
-        .connect(config.database.url.expose_secret())
-        .await
-        .map_err(AppError::DatabaseError)?;
+    let dynamic_pool_config = match config.environment {
+        automobile_inventory::config::EnvironmentType::Production => {
+            tracing::info!("Using conservative pool configuration for production");
+            DynamicPoolConfig::conservative()
+        }
+        automobile_inventory::config::EnvironmentType::Staging => {
+            tracing::info!("Using default pool configuration for staging");
+            DynamicPoolConfig::default()
+        }
+        _ => {
+            tracing::info!("Using default pool configuration for development");
+            DynamicPoolConfig::default()
+        }
+    };
 
-    tracing::info!("Database pool connected successfully");
+    let pool_manager = PoolBuilder::new(config.database.clone())
+        .with_dynamic_config(dynamic_pool_config)
+        .build()
+        .await
+        .map_err(|e| AppError::DatabaseError(e))?;
+
+    let pool = pool_manager.pool().clone();
+
+    tracing::info!(
+        pool_size = pool.size(),
+        pool_idle = pool.num_idle(),
+        "Database pool with dynamic monitoring initialized"
+    );
 
     sqlx::migrate!("./migrations")
         .run(&pool)
@@ -149,7 +163,7 @@ async fn run_application(config: AppConfig) -> Result<(), AppError> {
 
     let car_query_repo = Arc::new(PgCarQueryRepository::new(pool.clone()));
     let car_command_repo = Arc::new(PgCarCommandRepository::new(pool.clone()));
-    // let car_repo_facade = Arc::new(PgCarRepository::new(pool.clone()));
+    let _car_repo_facade = Arc::new(PgCarRepository::new(pool.clone()));
 
     let reservation_repo = Arc::new(PgReservationRepository::new(pool.clone()));
     let warehouse_repo = Arc::new(PgWarehouseRepository::new(pool.clone()));
@@ -172,6 +186,7 @@ async fn run_application(config: AppConfig) -> Result<(), AppError> {
         config: config.clone(),
         start_time: std::time::Instant::now(),
         db_circuit_breaker,
+        pool_manager: Some(pool_manager),
     };
 
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
