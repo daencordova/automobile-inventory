@@ -1681,7 +1681,7 @@ impl InventoryAnalyticsRepository for PgInventoryAnalyticsRepository {
                 c.model,
                 c.quantity_in_stock AS current_stock,
                 COALESCE(r.reserved_qty, 0) AS reserved_stock,
-                (c.quantity_in_stock - COALESCE(r.reserved_qty, 0)::int) AS available_stock,
+                (c.quantity_in_stock - COALESCE(r.reserved_qty, 0)::bigint)::int AS available_stock,
                 c.reorder_point,
                 c.economic_order_qty,
                 CASE
@@ -1693,11 +1693,11 @@ impl InventoryAnalyticsRepository for PgInventoryAnalyticsRepository {
                     WHEN s.avg_daily_sales > 0 THEN 'UP'
                     ELSE 'STABLE'
                 END AS trend_direction,
-                10.0 AS trend_percentage,
+                10.0::float8 AS trend_percentage,
                 s.avg_daily_sales,
                 CASE
                     WHEN s.avg_daily_sales > 0
-                    THEN ((c.quantity_in_stock - COALESCE(r.reserved_qty, 0)::int) / s.avg_daily_sales)::int
+                    THEN ((c.quantity_in_stock - COALESCE(r.reserved_qty, 0)::bigint) / s.avg_daily_sales)::int
                     ELSE NULL
                 END AS days_until_stockout,
                 'Reorder' AS suggested_action_type,

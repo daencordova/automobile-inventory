@@ -8,6 +8,7 @@ pub struct BatchConfig {
     pub backoff_base_ms: u64,
     pub backoff_max_ms: u64,
     pub commit_interval_secs: u64,
+    pub query_timeout_secs: u64,
 }
 
 impl Default for BatchConfig {
@@ -18,6 +19,7 @@ impl Default for BatchConfig {
             backoff_base_ms: 100,
             backoff_max_ms: 5000,
             commit_interval_secs: 5,
+            query_timeout_secs: 10,
         }
     }
 }
@@ -30,6 +32,7 @@ impl BatchConfig {
             backoff_base_ms: 250,
             backoff_max_ms: 10000,
             commit_interval_secs: 10,
+            query_timeout_secs: 15,
         }
     }
 
@@ -40,6 +43,7 @@ impl BatchConfig {
             backoff_base_ms: 50,
             backoff_max_ms: 2000,
             commit_interval_secs: 2,
+            query_timeout_secs: 5,
         }
     }
 }
@@ -239,14 +243,14 @@ impl BackgroundWorker {
         let batch_size = self.batch_config.batch_size as i64;
 
         let tx_result = tokio::time::timeout(
-            Duration::from_secs(10),
+            Duration::from_secs(self.batch_config.query_timeout_secs),
             sqlx::query!(
                 r#"
                 WITH expired_batch AS (
                     SELECT id, car_id, quantity
                     FROM reservations
                     WHERE status = 'Pending'
-                      AND expires_at < NOW()
+                        AND expires_at < NOW()
                     ORDER BY expires_at ASC
                     LIMIT $1
                     FOR UPDATE SKIP LOCKED
@@ -264,7 +268,7 @@ impl BackgroundWorker {
                         quantity_in_stock = quantity_in_stock + ur.quantity,
                         status = CASE
                             WHEN c.status = 'Reserved'
-                                 AND c.quantity_in_stock + ur.quantity > 0
+                                    AND c.quantity_in_stock + ur.quantity > 0
                             THEN 'Available'
                             ELSE c.status
                         END,
@@ -272,14 +276,17 @@ impl BackgroundWorker {
                     FROM update_reservations ur
                     WHERE c.car_id = ur.car_id
                     RETURNING c.car_id
+                ),
+                remaining_count AS (
+                    SELECT COUNT(*) as remaining
+                    FROM reservations
+                    WHERE status = 'Pending'
+                        AND expires_at < NOW()
+                        AND id NOT IN (SELECT id FROM update_reservations)
                 )
                 SELECT
                     COUNT(*) as processed_count,
-                    EXISTS(
-                        SELECT 1 FROM reservations
-                        WHERE status = 'Pending' AND expires_at < NOW()
-                        AND id NOT IN (SELECT id FROM update_reservations)
-                    ) as has_more
+                    (SELECT remaining > 0 FROM remaining_count) as has_more
                 FROM update_reservations
                 "#,
                 batch_size
