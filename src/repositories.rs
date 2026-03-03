@@ -498,34 +498,35 @@ impl CarCommandRepository for PgCarCommandRepository {
     async fn update_partial(&self, id: &CarId, data: CarUpdateData) -> SqlxResult<CarEntity> {
         let result = sqlx::query_as::<_, CarEntity>(
             r#"
-                UPDATE cars
-                SET
-                    brand = $1,
-                    model = $2,
-                    year = $3,
-                    color = $4,
-                    engine_type = $5,
-                    transmission = $6,
-                    price = $7,
-                    quantity_in_stock = $8,
-                    status = $9
-                WHERE car_id = $10
-                    AND deleted_at IS NULL
-                RETURNING
-                    car_id,
-                    brand,
-                    model,
-                    year,
-                    color,
-                    engine_type,
-                    transmission,
-                    price,
-                    quantity_in_stock,
-                    status,
-                    created_at,
-                    updated_at,
-                    deleted_at
-                "#,
+            UPDATE cars
+            SET
+                brand = $1,
+                model = $2,
+                year = $3,
+                color = $4,
+                engine_type = $5,
+                transmission = $6,
+                price = $7,
+                quantity_in_stock = $8,
+                status = $9,
+                updated_at = NOW()
+            WHERE car_id = $10
+                AND deleted_at IS NULL
+            RETURNING
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            "#,
         )
         .bind(data.brand)
         .bind(data.model)
@@ -1750,13 +1751,12 @@ impl InventoryAnalyticsRepository for PgInventoryAnalyticsRepository {
             r#"
             SELECT
                 COUNT(DISTINCT c.car_id),
-                SUM(c.price * c.quantity_in_stock),
-                COUNT(DISTINCT w.warehouse_id),
-                COUNT(DISTINCT r.id) FILTER (WHERE r.status = 'Pending'),
-                COALESCE(SUM(r.quantity) FILTER (WHERE r.status = 'Pending'), 0),
+                COALESCE(SUM(c.price * c.quantity_in_stock), 0),
+                (SELECT COUNT(*) FROM warehouses WHERE is_active = true),
+                COUNT(DISTINCT r.id) FILTER (WHERE r.status = 'Pending' AND r.expires_at > NOW()),
+                COALESCE(SUM(r.quantity) FILTER (WHERE r.status = 'Pending' AND r.expires_at > NOW()), 0),
                 COUNT(DISTINCT c.car_id) FILTER (WHERE c.quantity_in_stock <= c.reorder_point)
             FROM cars c
-            CROSS JOIN warehouses w
             LEFT JOIN reservations r ON c.car_id = r.car_id
             WHERE c.deleted_at IS NULL
             "#,

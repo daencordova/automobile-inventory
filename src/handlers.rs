@@ -33,9 +33,16 @@ pub async fn health_check_handler(State(state): State<AppState>) -> impl IntoRes
     let system_health = state.health_check_service.check_full().await;
 
     let (http_status, db_status_str) = match &system_health.database {
-        HealthStatus::Healthy => (StatusCode::OK, "Up"),
+        HealthStatus::Healthy => {
+            tracing::debug!("Health check passed");
+            (StatusCode::OK, "Up")
+        }
         HealthStatus::Degraded(reason) => {
-            tracing::warn!("Health check degraded: {}", reason);
+            if state.config.environment.is_production() {
+                tracing::info!("Health check degraded: {}", reason);
+            } else {
+                tracing::warn!("Health check degraded: {}", reason);
+            }
             (StatusCode::OK, "Degraded")
         }
         HealthStatus::Unhealthy(reason) => {

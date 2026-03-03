@@ -198,6 +198,17 @@ impl CircuitBreaker {
                 let mut successes = self.success_count.write().await;
                 *successes += 1;
 
+                if *successes == 1 {
+                    let mut failures = self.failure_count.write().await;
+                    if *failures > 0 {
+                        *failures = 0;
+                        tracing::debug!(
+                            circuit_breaker = %self.name,
+                            "Resetting failure count on first HalfOpen success"
+                        );
+                    }
+                }
+
                 tracing::debug!(
                     circuit_breaker = %self.name,
                     success_count = *successes,
@@ -215,7 +226,7 @@ impl CircuitBreaker {
                         );
                         *state_guard = CircuitState::Closed;
                         *self.last_state_change.write().await = Instant::now();
-                        *self.failure_count.write().await = 0;
+                        *self.success_count.write().await = 0;
                         *self.half_open_calls.write().await = 0;
                     }
                 }
