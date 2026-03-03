@@ -38,15 +38,7 @@ pub trait CarRepository: Send + Sync {
         pagination: &PaginationParams,
     ) -> SqlxResult<(Vec<CarEntity>, i64)>;
 
-    async fn update(&self, id: &CarId, dto: CreateCarDto) -> SqlxResult<CarEntity>;
     async fn update_partial(&self, id: &CarId, data: CarUpdateData) -> SqlxResult<CarEntity>;
-
-    async fn update_with_version(
-        &self,
-        id: &CarId,
-        dto: CreateCarDto,
-        expected_version: i64,
-    ) -> SqlxResult<CarEntity>;
 
     async fn update_with_version_data(
         &self,
@@ -229,109 +221,6 @@ impl CarRepository for PgCarRepository {
         Ok((cars, total))
     }
 
-    async fn update(&self, id: &CarId, dto: CreateCarDto) -> SqlxResult<CarEntity> {
-        let result = sqlx::query_as::<_, CarEntity>(
-            r#"
-            UPDATE cars
-            SET
-                brand = $1,
-                model = $2,
-                year = $3,
-                color = $4,
-                engine_type = $5,
-                transmission = $6,
-                price = $7,
-                quantity_in_stock = $8,
-                status = $9
-            WHERE car_id = $10
-                AND deleted_at IS NULL
-            RETURNING
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status,
-                created_at,
-                updated_at,
-                deleted_at
-            "#,
-        )
-        .bind(dto.brand)
-        .bind(dto.model)
-        .bind(dto.year)
-        .bind(dto.color)
-        .bind(dto.engine_type)
-        .bind(dto.transmission)
-        .bind(dto.price)
-        .bind(dto.quantity_in_stock)
-        .bind(dto.status)
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        result.ok_or(sqlx::Error::RowNotFound)
-    }
-
-    async fn update_with_version(
-        &self,
-        id: &CarId,
-        dto: CreateCarDto,
-        expected_version: i64,
-    ) -> SqlxResult<CarEntity> {
-        let result = sqlx::query_as::<_, CarEntity>(
-            r#"
-            UPDATE cars
-            SET
-                brand = $1,
-                model = $2,
-                year = $3,
-                color = $4,
-                engine_type = $5,
-                transmission = $6,
-                price = $7,
-                quantity_in_stock = $8,
-                status = $9
-            WHERE car_id = $10
-                AND deleted_at IS NULL
-                AND version = $11
-            RETURNING
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status,
-                created_at,
-                updated_at,
-                deleted_at
-            "#,
-        )
-        .bind(dto.brand)
-        .bind(dto.model)
-        .bind(dto.year)
-        .bind(dto.color)
-        .bind(dto.engine_type)
-        .bind(dto.transmission)
-        .bind(dto.price)
-        .bind(dto.quantity_in_stock)
-        .bind(dto.status)
-        .bind(id)
-        .bind(expected_version)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        result.ok_or(sqlx::Error::RowNotFound)
-    }
-
     async fn update_with_version_data(
         &self,
         id: &CarId,
@@ -340,35 +229,35 @@ impl CarRepository for PgCarRepository {
     ) -> SqlxResult<CarEntity> {
         let result = sqlx::query_as::<_, CarEntity>(
             r#"
-            UPDATE cars
-            SET
-                brand = $1,
-                model = $2,
-                year = $3,
-                color = $4,
-                engine_type = $5,
-                transmission = $6,
-                price = $7,
-                quantity_in_stock = $8,
-                status = $9
-            WHERE car_id = $10
-                AND deleted_at IS NULL
-                AND version = $11
-            RETURNING
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status,
-                created_at,
-                updated_at,
-                deleted_at
-            "#,
+                UPDATE cars
+                SET
+                    brand = $1,
+                    model = $2,
+                    year = $3,
+                    color = $4,
+                    engine_type = $5,
+                    transmission = $6,
+                    price = $7,
+                    quantity_in_stock = $8,
+                    status = $9
+                WHERE car_id = $10
+                    AND deleted_at IS NULL
+                    AND version = $11
+                RETURNING
+                    car_id,
+                    brand,
+                    model,
+                    year,
+                    color,
+                    engine_type,
+                    transmission,
+                    price,
+                    quantity_in_stock,
+                    status,
+                    created_at,
+                    updated_at,
+                    deleted_at
+                "#,
         )
         .bind(data.brand)
         .bind(data.model)
@@ -390,34 +279,34 @@ impl CarRepository for PgCarRepository {
     async fn update_partial(&self, id: &CarId, data: CarUpdateData) -> SqlxResult<CarEntity> {
         let result = sqlx::query_as::<_, CarEntity>(
             r#"
-            UPDATE cars
-            SET
-                brand = $1,
-                model = $2,
-                year = $3,
-                color = $4,
-                engine_type = $5,
-                transmission = $6,
-                price = $7,
-                quantity_in_stock = $8,
-                status = $9
-            WHERE car_id = $10
-                AND deleted_at IS NULL
-            RETURNING
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status,
-                created_at,
-                updated_at,
-                deleted_at
-            "#,
+                UPDATE cars
+                SET
+                    brand = $1,
+                    model = $2,
+                    year = $3,
+                    color = $4,
+                    engine_type = $5,
+                    transmission = $6,
+                    price = $7,
+                    quantity_in_stock = $8,
+                    status = $9
+                WHERE car_id = $10
+                    AND deleted_at IS NULL
+                RETURNING
+                    car_id,
+                    brand,
+                    model,
+                    year,
+                    color,
+                    engine_type,
+                    transmission,
+                    price,
+                    quantity_in_stock,
+                    status,
+                    created_at,
+                    updated_at,
+                    deleted_at
+                "#,
         )
         .bind(data.brand)
         .bind(data.model)

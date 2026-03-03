@@ -83,22 +83,6 @@ impl CarService {
     }
 
     #[instrument(skip(self))]
-    pub async fn update_car(&self, id: CarId, dto: CreateCarDto) -> AppResult<CarResponse> {
-        let entity = self
-            .repository
-            .update(&id, dto)
-            .await
-            .map_err(|e| match e {
-                sqlx::Error::RowNotFound => AppError::NotFound,
-                _ => AppError::from_db(e, "Car"),
-            })?;
-
-        self.cache.invalidate_car(id.as_str()).await;
-
-        Ok(CarResponse::from(entity))
-    }
-
-    #[instrument(skip(self))]
     pub async fn update_car_with_version(
         &self,
         id: CarId,
@@ -114,20 +98,7 @@ impl CarService {
             .await?
             .ok_or(AppError::NotFound)?;
 
-        let update_data = CarUpdateData {
-            brand: dto.brand.unwrap_or(current.brand),
-            model: dto.model.unwrap_or(current.model),
-            year: dto.year.unwrap_or(current.year),
-            color: dto.color.or(current.color).unwrap_or_default(),
-            engine_type: dto.engine_type.unwrap_or(current.engine_type),
-            transmission: dto
-                .transmission
-                .or(current.transmission)
-                .unwrap_or_default(),
-            price: dto.price.unwrap_or(current.price),
-            quantity_in_stock: dto.quantity_in_stock.unwrap_or(current.quantity_in_stock),
-            status: dto.status.unwrap_or(current.status),
-        };
+        let update_data = dto.into_update_data(&current);
 
         let entity = self
             .repository
@@ -151,20 +122,7 @@ impl CarService {
             .await?
             .ok_or(AppError::NotFound)?;
 
-        let update_data = CarUpdateData {
-            brand: dto.brand.unwrap_or(current.brand),
-            model: dto.model.unwrap_or(current.model),
-            year: dto.year.unwrap_or(current.year),
-            color: dto.color.or(current.color).unwrap_or_default(),
-            engine_type: dto.engine_type.unwrap_or(current.engine_type),
-            transmission: dto
-                .transmission
-                .or(current.transmission)
-                .unwrap_or_default(),
-            price: dto.price.unwrap_or(current.price),
-            quantity_in_stock: dto.quantity_in_stock.unwrap_or(current.quantity_in_stock),
-            status: dto.status.unwrap_or(current.status),
-        };
+        let update_data = dto.into_update_data(&current);
 
         let entity = self
             .repository

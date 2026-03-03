@@ -89,6 +89,40 @@ impl<T> PaginatedResponse<T> {
     }
 }
 
+pub trait ValidatedId: Clone + Send + Sync + 'static {
+    const PREFIX: char;
+    const MIN_LENGTH: usize;
+
+    fn new(id: String) -> Result<Self, AppError>
+    where
+        Self: Sized;
+    fn as_str(&self) -> &str;
+
+    fn validate_format(id: &str) -> Result<(), ValidationError> {
+        if !id.starts_with(Self::PREFIX) {
+            let mut error = ValidationError::new("id_format_prefix");
+            error.message = Some(format!("ID must start with '{}'", Self::PREFIX).into());
+            return Err(error);
+        }
+
+        if id.len() < Self::MIN_LENGTH {
+            let mut error = ValidationError::new("id_format_length");
+            error.message =
+                Some(format!("ID must be at least {} characters", Self::MIN_LENGTH).into());
+            return Err(error);
+        }
+
+        let suffix = &id[1..];
+        if !suffix.chars().all(|c| c.is_ascii_digit()) {
+            let mut error = ValidationError::new("id_format_suffix");
+            error.message = Some("ID must have digits after prefix".into());
+            return Err(error);
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq, sqlx::Type)]
 #[sqlx(transparent)]
 #[serde(try_from = "String")]
@@ -107,6 +141,26 @@ impl CarId {
     }
 
     pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl ValidatedId for CarId {
+    const PREFIX: char = 'C';
+    const MIN_LENGTH: usize = 5;
+
+    fn new(id: String) -> Result<Self, AppError> {
+        Self::validate_format(&id).map_err(|e| {
+            AppError::ConfigError(format!(
+                "Invalid CarId format: {} - {}",
+                id,
+                e.message.unwrap_or_default()
+            ))
+        })?;
+        Ok(Self(id))
+    }
+
+    fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -134,26 +188,7 @@ impl FromStr for CarId {
 }
 
 pub fn validate_car_id_format(car_id: &str) -> Result<(), ValidationError> {
-    if !car_id.starts_with('C') {
-        let mut error = ValidationError::new("car_id_format");
-        error.message = Some("car_id must start with 'C'".into());
-        return Err(error);
-    }
-
-    if car_id.len() < 5 {
-        let mut error = ValidationError::new("car_id_format");
-        error.message = Some("car_id must be at least 5 characters".into());
-        return Err(error);
-    }
-
-    let suffix = &car_id[1..];
-    if !suffix.chars().all(|c| c.is_ascii_digit()) {
-        let mut error = ValidationError::new("car_id_format");
-        error.message = Some("car_id must have digits after 'C'".into());
-        return Err(error);
-    }
-
-    Ok(())
+    CarId::validate_format(car_id)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::Type, PartialEq)]
@@ -192,7 +227,7 @@ pub struct Car {
 
 #[derive(Debug, Deserialize, Serialize, Validate, ToSchema)]
 #[schema(example = json!({
-    "car_id": "CAR-123",
+    "car_id": "C0001",
     "brand": "Toyota",
     "model": "Corolla",
     "year": 2024,
@@ -207,6 +242,7 @@ pub struct CreateCarDto {
     /// Unique inventory identifier
     #[schema(example = "C0001", min_length = 3)]
     #[validate(length(min = 5, message = "ID cannot be empty"))]
+    #[validate(custom(function = "validate_car_id_format"))]
     pub car_id: String,
 
     /// Automobile manufacturer
@@ -494,7 +530,7 @@ pub struct CarVersion {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize, Validate, ToSchema)]
+#[derive(Debug, Deserialize, Validate, ToSchema, Default)]
 pub struct UpdateCarDto {
     #[validate(length(min = 3, max = 50))]
     pub brand: Option<String>,
@@ -537,6 +573,30 @@ pub struct CarUpdateData {
     pub status: CarStatus,
 }
 
+impl UpdateCarDto {
+    pub fn into_update_data(self, current: &CarEntity) -> CarUpdateData {
+        CarUpdateData {
+            brand: self.brand.unwrap_or_else(|| current.brand.clone()),
+            model: self.model.unwrap_or_else(|| current.model.clone()),
+            year: self.year.unwrap_or(current.year),
+            color: self
+                .color
+                .or_else(|| current.color.clone())
+                .unwrap_or_default(),
+            engine_type: self
+                .engine_type
+                .unwrap_or_else(|| current.engine_type.clone()),
+            transmission: self
+                .transmission
+                .or_else(|| current.transmission.clone())
+                .unwrap_or_default(),
+            price: self.price.unwrap_or_else(|| current.price.clone()),
+            quantity_in_stock: self.quantity_in_stock.unwrap_or(current.quantity_in_stock),
+            status: self.status.unwrap_or_else(|| current.status.clone()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, ToSchema, PartialEq, Eq, sqlx::Type)]
 #[sqlx(transparent)]
 pub struct WarehouseId(String);
@@ -554,6 +614,26 @@ impl WarehouseId {
     }
 
     pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl ValidatedId for WarehouseId {
+    const PREFIX: char = 'W';
+    const MIN_LENGTH: usize = 4;
+
+    fn new(id: String) -> Result<Self, AppError> {
+        Self::validate_format(&id).map_err(|e| {
+            AppError::ConfigError(format!(
+                "Invalid WarehouseId format: {} - {}. Must start with 'W'",
+                id,
+                e.message.unwrap_or_default()
+            ))
+        })?;
+        Ok(Self(id))
+    }
+
+    fn as_str(&self) -> &str {
         &self.0
     }
 }
