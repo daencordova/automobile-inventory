@@ -27,8 +27,8 @@ use automobile_inventory::{
     middleware::request_context_middleware,
     observability::init_tracing,
     repositories::{
-        PgCarRepository, PgInventoryAnalyticsRepository, PgReservationRepository,
-        PgWarehouseRepository,
+        PgCarCommandRepository, PgCarQueryRepository, PgInventoryAnalyticsRepository,
+        PgReservationRepository, PgWarehouseRepository,
     },
     routes::create_router,
     services::{
@@ -141,17 +141,21 @@ async fn run_application(config: AppConfig) -> Result<(), AppError> {
         "database_operations",
         CircuitBreakerConfig::default(),
     ));
+
     tracing::info!(
         circuit_breaker = "database_operations",
         "Circuit breaker initialized"
     );
 
-    let car_repo = Arc::new(PgCarRepository::new(pool.clone()));
+    let car_query_repo = Arc::new(PgCarQueryRepository::new(pool.clone()));
+    let car_command_repo = Arc::new(PgCarCommandRepository::new(pool.clone()));
+    // let car_repo_facade = Arc::new(PgCarRepository::new(pool.clone()));
+
     let reservation_repo = Arc::new(PgReservationRepository::new(pool.clone()));
     let warehouse_repo = Arc::new(PgWarehouseRepository::new(pool.clone()));
     let analytics_repo = Arc::new(PgInventoryAnalyticsRepository::new(pool.clone()));
 
-    let car_service = CarService::new(car_repo.clone());
+    let car_service = CarService::new(car_query_repo, car_command_repo);
     let reservation_service = Arc::new(ReservationService::new(reservation_repo));
     let warehouse_service = Arc::new(WarehouseService::new(warehouse_repo));
     let inventory_analytics_service = Arc::new(InventoryAnalyticsService::new(analytics_repo));

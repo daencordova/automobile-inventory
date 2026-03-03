@@ -13,3 +13,8 @@ pub mod routes;
 pub mod services;
 pub mod state;
 pub mod uow;
+
+pub use repositories::{
+    CarCommandRepository, CarQueryRepository, CarRepository, PgCarCommandRepository,
+    PgCarQueryRepository, PgCarRepository,
+};

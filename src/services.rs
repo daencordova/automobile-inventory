@@ -19,21 +19,34 @@ use crate::models::{
     SystemHealth, TransferOrder, UpdateCarDto, Warehouse, WarehouseId,
 };
 use crate::repositories::{
-    CarRepository, InventoryAnalyticsRepository, ReservationRepository, SalesRepository,
-    WarehouseRepository,
+    CarCommandRepository, CarQueryRepository, CarRepository, InventoryAnalyticsRepository,
+    ReservationRepository, SalesRepository, WarehouseRepository,
 };
 use crate::uow::UnitOfWorkFactory;
 
 #[derive(Clone)]
 pub struct CarService {
-    repository: Arc<dyn CarRepository + Send + Sync>,
+    query_repo: Arc<dyn CarQueryRepository + Send + Sync>,
+    command_repo: Arc<dyn CarCommandRepository + Send + Sync>,
     cache: QueryCache,
 }
 
 impl CarService {
-    pub fn new(repository: Arc<dyn CarRepository + Send + Sync>) -> Self {
+    pub fn new(
+        query_repo: Arc<dyn CarQueryRepository + Send + Sync>,
+        command_repo: Arc<dyn CarCommandRepository + Send + Sync>,
+    ) -> Self {
         Self {
-            repository,
+            query_repo,
+            command_repo,
+            cache: QueryCache::new(),
+        }
+    }
+
+    pub fn from_repository(repo: Arc<dyn CarRepository + Send + Sync>) -> Self {
+        Self {
+            query_repo: Arc::clone(&repo) as Arc<dyn CarQueryRepository + Send + Sync>,
+            command_repo: Arc::clone(&repo) as Arc<dyn CarCommandRepository + Send + Sync>,
             cache: QueryCache::new(),
         }
     }
@@ -41,7 +54,7 @@ impl CarService {
     #[instrument(skip(self))]
     pub async fn create_car(&self, dto: CreateCarDto) -> AppResult<CarResponse> {
         let entity = self
-            .repository
+            .command_repo
             .create(dto)
             .await
             .map_err(|e| AppError::from_db(e, "Car"))?;
@@ -53,10 +66,11 @@ impl CarService {
 
     #[instrument(skip(self))]
     pub async fn get_car_by_id(&self, id: CarId) -> AppResult<CarResponse> {
+        let query_repo = Arc::clone(&self.query_repo);
+
         self.cache
             .get_car_by_id(id.as_str(), || async {
-                let entity = self
-                    .repository
+                let entity = query_repo
                     .find_by_id(id.clone())
                     .await?
                     .ok_or(AppError::NotFound)?;
@@ -75,7 +89,7 @@ impl CarService {
 
         let (_, _, page, page_size) = pagination.normalize();
 
-        let (entities, total) = self.repository.find_all(&filter, &pagination).await?;
+        let (entities, total) = self.query_repo.find_all(&filter, &pagination).await?;
 
         let dtos = entities.into_iter().map(CarResponse::from).collect();
 
@@ -93,7 +107,7 @@ impl CarService {
             .ok_or_else(|| AppError::ValidationError(validator::ValidationErrors::new()))?;
 
         let current = self
-            .repository
+            .query_repo
             .find_by_id(id.clone())
             .await?
             .ok_or(AppError::NotFound)?;
@@ -101,8 +115,8 @@ impl CarService {
         let update_data = dto.into_update_data(&current);
 
         let entity = self
-            .repository
-            .update_with_version_data(&id, update_data, expected_version)
+            .command_repo
+            .update_with_version(&id, update_data, expected_version)
             .await
             .map_err(|e| match e {
                 sqlx::Error::RowNotFound => AppError::ConcurrentModification,
@@ -117,7 +131,7 @@ impl CarService {
     #[instrument(skip(self))]
     pub async fn update_car_partial(&self, id: CarId, dto: UpdateCarDto) -> AppResult<CarResponse> {
         let current = self
-            .repository
+            .query_repo
             .find_by_id(id.clone())
             .await?
             .ok_or(AppError::NotFound)?;
@@ -125,7 +139,7 @@ impl CarService {
         let update_data = dto.into_update_data(&current);
 
         let entity = self
-            .repository
+            .command_repo
             .update_partial(&id, update_data)
             .await
             .map_err(|e| match e {
@@ -140,7 +154,7 @@ impl CarService {
 
     #[instrument(skip(self))]
     pub async fn delete_car(&self, id: CarId) -> AppResult<()> {
-        self.repository
+        self.command_repo
             .soft_delete(&id)
             .await
             .map_err(|e| match e {
@@ -168,7 +182,7 @@ impl CarService {
                 brand: None,
                 status: request.status.as_ref().map(|s| format!("{:?}", s)),
             };
-            let (entities, total) = self.repository.find_all(&filter, &pagination).await?;
+            let (entities, total) = self.query_repo.find_all(&filter, &pagination).await?;
 
             let results = entities
                 .into_iter()
@@ -182,7 +196,7 @@ impl CarService {
             return Ok(PaginatedResponse::new(results, total, page, page_size));
         }
 
-        let (results, total) = self.repository.search(&request, &pagination).await?;
+        let (results, total) = self.query_repo.search(&request, &pagination).await?;
 
         let dtos = results
             .into_iter()
@@ -198,9 +212,11 @@ impl CarService {
 
     #[instrument(skip(self))]
     pub async fn get_dashboard_stats(&self) -> AppResult<DashboardStats> {
+        let query_repo = Arc::clone(&self.query_repo);
+
         self.cache
             .get_dashboard_stats(|| async {
-                let stats: Vec<InventoryStatusStat> = self.repository.get_inventory_stats().await?;
+                let stats: Vec<InventoryStatusStat> = query_repo.get_inventory_stats().await?;
 
                 let total_value = stats
                     .iter()
@@ -216,9 +232,11 @@ impl CarService {
     }
 
     pub async fn get_depreciation_report(&self) -> AppResult<Vec<CarResponse>> {
+        let query_repo = Arc::clone(&self.query_repo);
+
         self.cache
             .get_depreciation(|| async {
-                let cars = self.repository.get_depreciation_report().await?;
+                let cars = query_repo.get_depreciation_report().await?;
                 Ok(cars.into_iter().map(CarResponse::from).collect())
             })
             .await
@@ -229,10 +247,11 @@ impl CarService {
         threshold: Option<i32>,
     ) -> AppResult<Vec<CarResponse>> {
         let limit = threshold.unwrap_or(3);
+        let query_repo = Arc::clone(&self.query_repo);
 
         self.cache
             .get_low_stock(limit, || async {
-                let cars = self.repository.get_low_stock_report(limit).await?;
+                let cars = query_repo.get_low_stock_report(limit).await?;
                 Ok(cars.into_iter().map(CarResponse::from).collect())
             })
             .await

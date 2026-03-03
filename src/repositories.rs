@@ -15,15 +15,7 @@ use crate::models::{
 use crate::uow::UnitOfWork;
 
 #[async_trait]
-pub trait CarRepository: Send + Sync {
-    async fn create(&self, dto: CreateCarDto) -> SqlxResult<CarEntity>;
-
-    async fn create_in_uow(
-        &self,
-        uow: &mut UnitOfWork<'_>,
-        dto: CreateCarDto,
-    ) -> SqlxResult<CarEntity>;
-
+pub trait CarQueryRepository: Send + Sync {
     async fn find_by_id(&self, id: CarId) -> SqlxResult<Option<CarEntity>>;
 
     async fn find_by_id_in_uow(
@@ -38,14 +30,28 @@ pub trait CarRepository: Send + Sync {
         pagination: &PaginationParams,
     ) -> SqlxResult<(Vec<CarEntity>, i64)>;
 
-    async fn update_partial(&self, id: &CarId, data: CarUpdateData) -> SqlxResult<CarEntity>;
-
-    async fn update_with_version_data(
+    async fn search(
         &self,
-        id: &CarId,
-        data: CarUpdateData,
-        expected_version: i64,
+        request: &CarSearchRequest,
+        pagination: &PaginationParams,
+    ) -> SqlxResult<(Vec<(CarEntity, f32)>, i64)>;
+
+    async fn get_inventory_stats(&self) -> SqlxResult<Vec<InventoryStatusStat>>;
+    async fn get_depreciation_report(&self) -> SqlxResult<Vec<CarEntity>>;
+    async fn get_low_stock_report(&self, threshold: i32) -> SqlxResult<Vec<CarEntity>>;
+}
+
+#[async_trait]
+pub trait CarCommandRepository: Send + Sync {
+    async fn create(&self, dto: CreateCarDto) -> SqlxResult<CarEntity>;
+
+    async fn create_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        dto: CreateCarDto,
     ) -> SqlxResult<CarEntity>;
+
+    async fn update_partial(&self, id: &CarId, data: CarUpdateData) -> SqlxResult<CarEntity>;
 
     async fn update_in_uow(
         &self,
@@ -54,80 +60,33 @@ pub trait CarRepository: Send + Sync {
         data: CarUpdateData,
     ) -> SqlxResult<CarEntity>;
 
-    async fn soft_delete(&self, id: &CarId) -> SqlxResult<()>;
-    async fn get_inventory_stats(&self) -> SqlxResult<Vec<InventoryStatusStat>>;
-    async fn get_depreciation_report(&self) -> SqlxResult<Vec<CarEntity>>;
-    async fn get_low_stock_report(&self, threshold: i32) -> SqlxResult<Vec<CarEntity>>;
-
-    async fn search(
+    async fn update_with_version(
         &self,
-        request: &CarSearchRequest,
-        pagination: &PaginationParams,
-    ) -> SqlxResult<(Vec<(CarEntity, f32)>, i64)>;
+        id: &CarId,
+        data: CarUpdateData,
+        expected_version: i64,
+    ) -> SqlxResult<CarEntity>;
+
+    async fn soft_delete(&self, id: &CarId) -> SqlxResult<()>;
 }
 
-pub struct PgCarRepository {
+#[async_trait]
+pub trait CarRepository: CarQueryRepository + CarCommandRepository {}
+
+impl<T> CarRepository for T where T: CarQueryRepository + CarCommandRepository {}
+
+pub struct PgCarQueryRepository {
     pool: PgPool,
 }
 
-impl PgCarRepository {
+impl PgCarQueryRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
 #[async_trait]
-impl CarRepository for PgCarRepository {
-    async fn create(&self, dto: CreateCarDto) -> SqlxResult<CarEntity> {
-        sqlx::query_as::<_, CarEntity>(
-            r#"
-            INSERT INTO cars (
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status,
-                created_at,
-                updated_at,
-                deleted_at
-            "#,
-        )
-        .bind(dto.car_id)
-        .bind(dto.brand)
-        .bind(dto.model)
-        .bind(dto.year)
-        .bind(dto.color)
-        .bind(dto.engine_type)
-        .bind(dto.transmission)
-        .bind(dto.price)
-        .bind(dto.quantity_in_stock)
-        .bind(dto.status)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| {
-            error!("Error creating car: {:?}", e);
-            e
-        })
-    }
-
+impl CarQueryRepository for PgCarQueryRepository {
     async fn find_by_id(&self, id: CarId) -> SqlxResult<Option<CarEntity>> {
         sqlx::query_as::<_, CarEntity>(
             r#"
@@ -157,6 +116,37 @@ impl CarRepository for PgCarRepository {
             error!("Error fetching car by id: {:?}", e);
             e
         })
+    }
+
+    async fn find_by_id_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        id: CarId,
+    ) -> SqlxResult<Option<CarEntity>> {
+        sqlx::query_as::<_, CarEntity>(
+            r#"
+            SELECT
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            FROM cars
+            WHERE car_id = $1
+                AND deleted_at IS NULL
+            "#,
+        )
+        .bind(&id)
+        .fetch_optional(uow.connection())
+        .await
     }
 
     async fn find_all(
@@ -219,334 +209,6 @@ impl CarRepository for PgCarRepository {
         let cars = rows.into_iter().map(|r| r.car).collect();
 
         Ok((cars, total))
-    }
-
-    async fn update_with_version_data(
-        &self,
-        id: &CarId,
-        data: CarUpdateData,
-        expected_version: i64,
-    ) -> SqlxResult<CarEntity> {
-        let result = sqlx::query_as::<_, CarEntity>(
-            r#"
-                UPDATE cars
-                SET
-                    brand = $1,
-                    model = $2,
-                    year = $3,
-                    color = $4,
-                    engine_type = $5,
-                    transmission = $6,
-                    price = $7,
-                    quantity_in_stock = $8,
-                    status = $9
-                WHERE car_id = $10
-                    AND deleted_at IS NULL
-                    AND version = $11
-                RETURNING
-                    car_id,
-                    brand,
-                    model,
-                    year,
-                    color,
-                    engine_type,
-                    transmission,
-                    price,
-                    quantity_in_stock,
-                    status,
-                    created_at,
-                    updated_at,
-                    deleted_at
-                "#,
-        )
-        .bind(data.brand)
-        .bind(data.model)
-        .bind(data.year)
-        .bind(data.color)
-        .bind(data.engine_type)
-        .bind(data.transmission)
-        .bind(data.price)
-        .bind(data.quantity_in_stock)
-        .bind(data.status)
-        .bind(id)
-        .bind(expected_version)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        result.ok_or(sqlx::Error::RowNotFound)
-    }
-
-    async fn update_partial(&self, id: &CarId, data: CarUpdateData) -> SqlxResult<CarEntity> {
-        let result = sqlx::query_as::<_, CarEntity>(
-            r#"
-                UPDATE cars
-                SET
-                    brand = $1,
-                    model = $2,
-                    year = $3,
-                    color = $4,
-                    engine_type = $5,
-                    transmission = $6,
-                    price = $7,
-                    quantity_in_stock = $8,
-                    status = $9
-                WHERE car_id = $10
-                    AND deleted_at IS NULL
-                RETURNING
-                    car_id,
-                    brand,
-                    model,
-                    year,
-                    color,
-                    engine_type,
-                    transmission,
-                    price,
-                    quantity_in_stock,
-                    status,
-                    created_at,
-                    updated_at,
-                    deleted_at
-                "#,
-        )
-        .bind(data.brand)
-        .bind(data.model)
-        .bind(data.year)
-        .bind(data.color)
-        .bind(data.engine_type)
-        .bind(data.transmission)
-        .bind(data.price)
-        .bind(data.quantity_in_stock)
-        .bind(data.status)
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        result.ok_or(sqlx::Error::RowNotFound)
-    }
-
-    async fn soft_delete(&self, id: &CarId) -> SqlxResult<()> {
-        let result = sqlx::query(
-            r#"
-            UPDATE cars
-            SET deleted_at = NOW()
-            WHERE car_id = $1
-                AND deleted_at IS NULL
-            "#,
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-
-        if result.rows_affected() == 0 {
-            return Err(sqlx::Error::RowNotFound);
-        }
-        Ok(())
-    }
-
-    async fn get_inventory_stats(&self) -> SqlxResult<Vec<InventoryStatusStat>> {
-        sqlx::query_as::<_, InventoryStatusStat>(
-            r#"
-            SELECT
-                status,
-                COUNT(*) AS total_units,
-                SUM(price * quantity_in_stock) AS inventory_value
-            FROM cars
-            WHERE deleted_at IS NULL
-            GROUP BY status
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-    }
-
-    async fn get_depreciation_report(&self) -> SqlxResult<Vec<CarEntity>> {
-        sqlx::query_as::<_, CarEntity>(
-            r#"
-            SELECT
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status,
-                created_at,
-                updated_at,
-                deleted_at
-            FROM cars
-            WHERE year < EXTRACT(YEAR FROM CURRENT_DATE) - 5
-                AND status = 'Available'
-                AND deleted_at IS NULL
-            ORDER BY year ASC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-    }
-
-    async fn get_low_stock_report(&self, threshold: i32) -> SqlxResult<Vec<CarEntity>> {
-        sqlx::query_as::<_, CarEntity>(
-            r#"
-            SELECT
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status,
-                created_at,
-                updated_at,
-                deleted_at
-            FROM cars
-            WHERE quantity_in_stock < $1
-                AND deleted_at IS NULL
-            ORDER BY quantity_in_stock ASC
-            "#,
-        )
-        .bind(threshold)
-        .fetch_all(&self.pool)
-        .await
-    }
-
-    async fn create_in_uow(
-        &self,
-        uow: &mut UnitOfWork<'_>,
-        dto: CreateCarDto,
-    ) -> SqlxResult<CarEntity> {
-        sqlx::query_as::<_, CarEntity>(
-            r#"
-            INSERT INTO cars (
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status,
-                created_at,
-                updated_at,
-                deleted_at
-            "#,
-        )
-        .bind(&dto.car_id)
-        .bind(&dto.brand)
-        .bind(&dto.model)
-        .bind(dto.year)
-        .bind(&dto.color)
-        .bind(&dto.engine_type)
-        .bind(&dto.transmission)
-        .bind(&dto.price)
-        .bind(dto.quantity_in_stock)
-        .bind(&dto.status)
-        .fetch_one(uow.connection())
-        .await
-    }
-
-    async fn update_in_uow(
-        &self,
-        uow: &mut UnitOfWork<'_>,
-        id: &CarId,
-        data: CarUpdateData,
-    ) -> SqlxResult<CarEntity> {
-        sqlx::query_as::<_, CarEntity>(
-            r#"
-            UPDATE cars
-            SET
-                brand = $1,
-                model = $2,
-                year = $3,
-                color = $4,
-                engine_type = $5,
-                transmission = $6,
-                price = $7,
-                quantity_in_stock = $8,
-                status = $9,
-                updated_at = NOW()
-            WHERE car_id = $10
-                AND deleted_at IS NULL
-            RETURNING
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status,
-                created_at,
-                updated_at,
-                deleted_at
-            "#,
-        )
-        .bind(&data.brand)
-        .bind(&data.model)
-        .bind(data.year)
-        .bind(&data.color)
-        .bind(&data.engine_type)
-        .bind(&data.transmission)
-        .bind(&data.price)
-        .bind(data.quantity_in_stock)
-        .bind(&data.status)
-        .bind(id)
-        .fetch_optional(uow.connection())
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
-    }
-
-    async fn find_by_id_in_uow(
-        &self,
-        uow: &mut UnitOfWork<'_>,
-        id: CarId,
-    ) -> SqlxResult<Option<CarEntity>> {
-        sqlx::query_as::<_, CarEntity>(
-            r#"
-            SELECT
-                car_id,
-                brand,
-                model,
-                year,
-                color,
-                engine_type,
-                transmission,
-                price,
-                quantity_in_stock,
-                status,
-                created_at,
-                updated_at,
-                deleted_at
-            FROM cars
-            WHERE car_id = $1
-                AND deleted_at IS NULL
-            "#,
-        )
-        .bind(&id)
-        .fetch_optional(uow.connection())
-        .await
     }
 
     async fn search(
@@ -647,7 +309,484 @@ impl CarRepository for PgCarRepository {
 
         Ok((results, total))
     }
+
+    async fn get_inventory_stats(&self) -> SqlxResult<Vec<InventoryStatusStat>> {
+        sqlx::query_as::<_, InventoryStatusStat>(
+            r#"
+            SELECT
+                status,
+                COUNT(*) AS total_units,
+                SUM(price * quantity_in_stock) AS inventory_value
+            FROM cars
+            WHERE deleted_at IS NULL
+            GROUP BY status
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    async fn get_depreciation_report(&self) -> SqlxResult<Vec<CarEntity>> {
+        sqlx::query_as::<_, CarEntity>(
+            r#"
+            SELECT
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            FROM cars
+            WHERE year < EXTRACT(YEAR FROM CURRENT_DATE) - 5
+                AND status = 'Available'
+                AND deleted_at IS NULL
+            ORDER BY year ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    async fn get_low_stock_report(&self, threshold: i32) -> SqlxResult<Vec<CarEntity>> {
+        sqlx::query_as::<_, CarEntity>(
+            r#"
+            SELECT
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            FROM cars
+            WHERE quantity_in_stock < $1
+                AND deleted_at IS NULL
+            ORDER BY quantity_in_stock ASC
+            "#,
+        )
+        .bind(threshold)
+        .fetch_all(&self.pool)
+        .await
+    }
 }
+
+pub struct PgCarCommandRepository {
+    pool: PgPool,
+}
+
+impl PgCarCommandRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl CarCommandRepository for PgCarCommandRepository {
+    async fn create(&self, dto: CreateCarDto) -> SqlxResult<CarEntity> {
+        sqlx::query_as::<_, CarEntity>(
+            r#"
+            INSERT INTO cars (
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            RETURNING
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            "#,
+        )
+        .bind(dto.car_id)
+        .bind(dto.brand)
+        .bind(dto.model)
+        .bind(dto.year)
+        .bind(dto.color)
+        .bind(dto.engine_type)
+        .bind(dto.transmission)
+        .bind(dto.price)
+        .bind(dto.quantity_in_stock)
+        .bind(dto.status)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| {
+            error!("Error creating car: {:?}", e);
+            e
+        })
+    }
+
+    async fn create_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        dto: CreateCarDto,
+    ) -> SqlxResult<CarEntity> {
+        sqlx::query_as::<_, CarEntity>(
+            r#"
+            INSERT INTO cars (
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            RETURNING
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            "#,
+        )
+        .bind(&dto.car_id)
+        .bind(&dto.brand)
+        .bind(&dto.model)
+        .bind(dto.year)
+        .bind(&dto.color)
+        .bind(&dto.engine_type)
+        .bind(&dto.transmission)
+        .bind(&dto.price)
+        .bind(dto.quantity_in_stock)
+        .bind(&dto.status)
+        .fetch_one(uow.connection())
+        .await
+    }
+
+    async fn update_partial(&self, id: &CarId, data: CarUpdateData) -> SqlxResult<CarEntity> {
+        let result = sqlx::query_as::<_, CarEntity>(
+            r#"
+                UPDATE cars
+                SET
+                    brand = $1,
+                    model = $2,
+                    year = $3,
+                    color = $4,
+                    engine_type = $5,
+                    transmission = $6,
+                    price = $7,
+                    quantity_in_stock = $8,
+                    status = $9
+                WHERE car_id = $10
+                    AND deleted_at IS NULL
+                RETURNING
+                    car_id,
+                    brand,
+                    model,
+                    year,
+                    color,
+                    engine_type,
+                    transmission,
+                    price,
+                    quantity_in_stock,
+                    status,
+                    created_at,
+                    updated_at,
+                    deleted_at
+                "#,
+        )
+        .bind(data.brand)
+        .bind(data.model)
+        .bind(data.year)
+        .bind(data.color)
+        .bind(data.engine_type)
+        .bind(data.transmission)
+        .bind(data.price)
+        .bind(data.quantity_in_stock)
+        .bind(data.status)
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        result.ok_or(sqlx::Error::RowNotFound)
+    }
+
+    async fn update_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        id: &CarId,
+        data: CarUpdateData,
+    ) -> SqlxResult<CarEntity> {
+        sqlx::query_as::<_, CarEntity>(
+            r#"
+            UPDATE cars
+            SET
+                brand = $1,
+                model = $2,
+                year = $3,
+                color = $4,
+                engine_type = $5,
+                transmission = $6,
+                price = $7,
+                quantity_in_stock = $8,
+                status = $9,
+                updated_at = NOW()
+            WHERE car_id = $10
+                AND deleted_at IS NULL
+            RETURNING
+                car_id,
+                brand,
+                model,
+                year,
+                color,
+                engine_type,
+                transmission,
+                price,
+                quantity_in_stock,
+                status,
+                created_at,
+                updated_at,
+                deleted_at
+            "#,
+        )
+        .bind(&data.brand)
+        .bind(&data.model)
+        .bind(data.year)
+        .bind(&data.color)
+        .bind(&data.engine_type)
+        .bind(&data.transmission)
+        .bind(&data.price)
+        .bind(data.quantity_in_stock)
+        .bind(&data.status)
+        .bind(id)
+        .fetch_optional(uow.connection())
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)
+    }
+
+    async fn update_with_version(
+        &self,
+        id: &CarId,
+        data: CarUpdateData,
+        expected_version: i64,
+    ) -> SqlxResult<CarEntity> {
+        let result = sqlx::query_as::<_, CarEntity>(
+            r#"
+                UPDATE cars
+                SET
+                    brand = $1,
+                    model = $2,
+                    year = $3,
+                    color = $4,
+                    engine_type = $5,
+                    transmission = $6,
+                    price = $7,
+                    quantity_in_stock = $8,
+                    status = $9
+                WHERE car_id = $10
+                    AND deleted_at IS NULL
+                    AND version = $11
+                RETURNING
+                    car_id,
+                    brand,
+                    model,
+                    year,
+                    color,
+                    engine_type,
+                    transmission,
+                    price,
+                    quantity_in_stock,
+                    status,
+                    created_at,
+                    updated_at,
+                    deleted_at
+                "#,
+        )
+        .bind(data.brand)
+        .bind(data.model)
+        .bind(data.year)
+        .bind(data.color)
+        .bind(data.engine_type)
+        .bind(data.transmission)
+        .bind(data.price)
+        .bind(data.quantity_in_stock)
+        .bind(data.status)
+        .bind(id)
+        .bind(expected_version)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        result.ok_or(sqlx::Error::RowNotFound)
+    }
+
+    async fn soft_delete(&self, id: &CarId) -> SqlxResult<()> {
+        let result = sqlx::query(
+            r#"
+            UPDATE cars
+            SET deleted_at = NOW()
+            WHERE car_id = $1
+                AND deleted_at IS NULL
+            "#,
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(sqlx::Error::RowNotFound);
+        }
+        Ok(())
+    }
+}
+
+pub struct PgCarRepository {
+    query: PgCarQueryRepository,
+    command: PgCarCommandRepository,
+}
+
+impl PgCarRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            query: PgCarQueryRepository::new(pool.clone()),
+            command: PgCarCommandRepository::new(pool),
+        }
+    }
+
+    pub fn query(&self) -> &PgCarQueryRepository {
+        &self.query
+    }
+
+    pub fn command(&self) -> &PgCarCommandRepository {
+        &self.command
+    }
+}
+
+#[async_trait]
+impl CarQueryRepository for PgCarRepository {
+    async fn find_by_id(&self, id: CarId) -> SqlxResult<Option<CarEntity>> {
+        self.query.find_by_id(id).await
+    }
+
+    async fn find_by_id_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        id: CarId,
+    ) -> SqlxResult<Option<CarEntity>> {
+        self.query.find_by_id_in_uow(uow, id).await
+    }
+
+    async fn find_all(
+        &self,
+        filter: &CarFilter,
+        pagination: &PaginationParams,
+    ) -> SqlxResult<(Vec<CarEntity>, i64)> {
+        self.query.find_all(filter, pagination).await
+    }
+
+    async fn search(
+        &self,
+        request: &CarSearchRequest,
+        pagination: &PaginationParams,
+    ) -> SqlxResult<(Vec<(CarEntity, f32)>, i64)> {
+        self.query.search(request, pagination).await
+    }
+
+    async fn get_depreciation_report(&self) -> SqlxResult<Vec<CarEntity>> {
+        self.query.get_depreciation_report().await
+    }
+
+    async fn get_low_stock_report(&self, threshold: i32) -> SqlxResult<Vec<CarEntity>> {
+        self.query.get_low_stock_report(threshold).await
+    }
+
+    async fn get_inventory_stats(&self) -> SqlxResult<Vec<InventoryStatusStat>> {
+        self.query.get_inventory_stats().await
+    }
+}
+
+#[async_trait]
+impl CarCommandRepository for PgCarRepository {
+    async fn create(&self, dto: CreateCarDto) -> SqlxResult<CarEntity> {
+        self.command.create(dto).await
+    }
+
+    async fn create_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        dto: CreateCarDto,
+    ) -> SqlxResult<CarEntity> {
+        self.command.create_in_uow(uow, dto).await
+    }
+
+    async fn update_partial(&self, id: &CarId, data: CarUpdateData) -> SqlxResult<CarEntity> {
+        self.command.update_partial(id, data).await
+    }
+
+    async fn update_with_version(
+        &self,
+        id: &CarId,
+        data: CarUpdateData,
+        expected_version: i64,
+    ) -> SqlxResult<CarEntity> {
+        self.command
+            .update_with_version(id, data, expected_version)
+            .await
+    }
+
+    async fn update_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        id: &CarId,
+        data: CarUpdateData,
+    ) -> SqlxResult<CarEntity> {
+        self.command.update_in_uow(uow, id, data).await
+    }
+
+    async fn soft_delete(&self, id: &CarId) -> SqlxResult<()> {
+        self.command.soft_delete(id).await
+    }
+}
+
+// pub struct PgCarRepository {
+//     pool: PgPool,
+// }
+
+// #[async_trait]
+// impl CarRepository for PgCarRepository {
+
+// }
 
 #[async_trait]
 pub trait ReservationRepository: Send + Sync {
