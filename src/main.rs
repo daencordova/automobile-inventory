@@ -24,8 +24,8 @@ use automobile_inventory::{
     observability::init_tracing,
     pool_manager::{DynamicPoolConfig, PoolBuilder},
     repositories::{
-        PgCarCommandRepository, PgCarQueryRepository, PgCarRepository,
-        PgInventoryAnalyticsRepository, PgReservationRepository, PgWarehouseRepository,
+        PgCarCommandRepository, PgCarQueryRepository, PgInventoryAnalyticsRepository,
+        PgReservationRepository, PgWarehouseRepository,
     },
     routes::create_router,
     services::{
@@ -163,7 +163,6 @@ async fn run_application(config: AppConfig) -> Result<(), AppError> {
 
     let car_query_repo = Arc::new(PgCarQueryRepository::new(pool.clone()));
     let car_command_repo = Arc::new(PgCarCommandRepository::new(pool.clone()));
-    let _car_repo_facade = Arc::new(PgCarRepository::new(pool.clone()));
 
     let reservation_repo = Arc::new(PgReservationRepository::new(pool.clone()));
     let warehouse_repo = Arc::new(PgWarehouseRepository::new(pool.clone()));

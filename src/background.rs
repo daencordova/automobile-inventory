@@ -51,15 +51,6 @@ pub struct BackgroundWorker {
     batch_config: BatchConfig,
 }
 
-pub struct BatchMetrics {
-    pub total_processed: u64,
-    pub total_batches: u64,
-    pub avg_batch_duration_ms: f64,
-    pub throughput_per_second: f64,
-    pub errors: u64,
-    pub last_batch_size: usize,
-}
-
 impl BackgroundWorker {
     pub fn new(
         pool: PgPool,

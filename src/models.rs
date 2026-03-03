@@ -129,17 +129,6 @@ pub trait ValidatedId: Clone + Send + Sync + 'static {
 pub struct CarId(String);
 
 impl CarId {
-    pub fn new(id: String) -> Result<Self, AppError> {
-        if id.starts_with("C") && id.len() >= 5 {
-            Ok(Self(id))
-        } else {
-            Err(AppError::ConfigError(format!(
-                "Invalid CarId format: {}",
-                id
-            )))
-        }
-    }
-
     pub fn as_str(&self) -> &str {
         &self.0
     }

@@ -16,7 +16,7 @@ use crate::models::{
     CarStatus, CarUpdateData, CreateCarDto, CreateReservationDto, DashboardStats, HealthStatus,
     InventoryAlertSummary, InventoryMetrics, InventoryStatusStat, PaginatedResponse,
     ReservationResponse, ReservationStatus, SalesVelocity, StockAlert, StockTransferDto,
-    SystemHealth, TransferOrder, UpdateCarDto, Warehouse, WarehouseId,
+    SystemHealth, TransferOrder, UpdateCarDto, ValidatedId, Warehouse, WarehouseId,
 };
 use crate::repositories::{
     CarCommandRepository, CarQueryRepository, CarRepository, InventoryAnalyticsRepository,
@@ -39,14 +39,6 @@ impl CarService {
         Self {
             query_repo,
             command_repo,
-            cache: QueryCache::new(),
-        }
-    }
-
-    pub fn from_repository(repo: Arc<dyn CarRepository + Send + Sync>) -> Self {
-        Self {
-            query_repo: Arc::clone(&repo) as Arc<dyn CarQueryRepository + Send + Sync>,
-            command_repo: Arc::clone(&repo) as Arc<dyn CarCommandRepository + Send + Sync>,
             cache: QueryCache::new(),
         }
     }
