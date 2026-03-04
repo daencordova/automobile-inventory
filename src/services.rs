@@ -206,21 +206,41 @@ impl CarService {
     pub async fn get_dashboard_stats(&self) -> AppResult<DashboardStats> {
         let query_repo = Arc::clone(&self.query_repo);
 
-        self.cache
-            .get_dashboard_stats(|| async {
-                let stats: Vec<InventoryStatusStat> = query_repo.get_inventory_stats().await?;
+        let result = self
+            .cache
+            .get_dashboard_stats(|| async { Self::fetch_dashboard_stats(query_repo).await })
+            .await;
 
-                let total_value = stats
-                    .iter()
-                    .map(|s| s.inventory_value.clone())
-                    .fold(BigDecimal::from(0), |acc, val| acc + val);
+        if result.is_err() {
+            let cache = self.cache.clone();
+            let query_repo_bg = Arc::clone(&self.query_repo);
+            tokio::spawn(async move {
+                tracing::debug!("Background refresh of dashboard stats after error");
+                if let Ok(stats) = Self::fetch_dashboard_stats(query_repo_bg).await {
+                    let _ = cache
+                        .insert_dashboard_stats("global".to_string(), stats)
+                        .await;
+                }
+            });
+        }
 
-                Ok(DashboardStats {
-                    status_distribution: stats,
-                    total_inventory_value: total_value,
-                })
-            })
-            .await
+        result
+    }
+
+    async fn fetch_dashboard_stats(
+        query_repo: Arc<dyn CarQueryRepository + Send + Sync>,
+    ) -> AppResult<DashboardStats> {
+        let stats: Vec<InventoryStatusStat> = query_repo.get_inventory_stats().await?;
+
+        let total_value = stats
+            .iter()
+            .map(|s| s.inventory_value.clone())
+            .fold(BigDecimal::from(0), |acc, val| acc + val);
+
+        Ok(DashboardStats {
+            status_distribution: stats,
+            total_inventory_value: total_value,
+        })
     }
 
     pub async fn get_depreciation_report(&self) -> AppResult<Vec<CarResponse>> {

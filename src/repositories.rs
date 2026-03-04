@@ -1639,6 +1639,19 @@ pub trait InventoryAnalyticsRepository: Send + Sync {
     async fn get_stock_alerts(&self) -> Result<Vec<StockAlertRow>, sqlx::Error>;
     async fn get_sales_velocity(&self, days: i32) -> Result<Vec<SalesVelocity>, sqlx::Error>;
     async fn get_inventory_metrics(&self) -> Result<InventoryMetrics, sqlx::Error>;
+
+    async fn upsert_inventory_metrics_batch(
+        &self,
+        metrics: Vec<(
+            chrono::DateTime<chrono::Utc>,
+            i64,
+            BigDecimal,
+            i64,
+            i64,
+            i64,
+            BigDecimal,
+        )>,
+    ) -> Result<(), sqlx::Error>;
 }
 
 pub struct PgInventoryAnalyticsRepository {
@@ -1773,6 +1786,78 @@ impl InventoryAnalyticsRepository for PgInventoryAnalyticsRepository {
             low_stock_items: row.5,
             stock_turnover_rate: 0.0,
         })
+    }
+
+    async fn upsert_inventory_metrics_batch(
+        &self,
+        metrics: Vec<(
+            chrono::DateTime<chrono::Utc>,
+            i64,
+            BigDecimal,
+            i64,
+            i64,
+            i64,
+            BigDecimal,
+        )>,
+    ) -> Result<(), sqlx::Error> {
+        if metrics.is_empty() {
+            return Ok(());
+        }
+
+        let mut hours = Vec::with_capacity(metrics.len());
+        let mut total_cars = Vec::with_capacity(metrics.len());
+        let mut total_values = Vec::with_capacity(metrics.len());
+        let mut active_reservations = Vec::with_capacity(metrics.len());
+        let mut reserved_units = Vec::with_capacity(metrics.len());
+        let mut low_stock_counts = Vec::with_capacity(metrics.len());
+        let mut available_stock_values = Vec::with_capacity(metrics.len());
+
+        for (hour, cars, value, reservations, reserved, low_stock, available_value) in metrics {
+            hours.push(hour);
+            total_cars.push(cars);
+            total_values.push(value);
+            active_reservations.push(reservations);
+            reserved_units.push(reserved);
+            low_stock_counts.push(low_stock);
+            available_stock_values.push(available_value);
+        }
+
+        sqlx::query(
+            r#"
+                INSERT INTO inventory_metrics_history (
+                    metric_hour, total_cars, total_value, active_reservations,
+                    reserved_units, low_stock_count, available_stock_value
+                )
+                SELECT * FROM UNNEST(
+                    $1::timestamptz[],
+                    $2::bigint[],
+                    $3::numeric[],
+                    $4::bigint[],
+                    $5::bigint[],
+                    $6::bigint[],
+                    $7::numeric[]
+                )
+                ON CONFLICT (metric_hour) DO UPDATE SET
+                    total_cars = EXCLUDED.total_cars,
+                    total_value = EXCLUDED.total_value,
+                    active_reservations = EXCLUDED.active_reservations,
+                    reserved_units = EXCLUDED.reserved_units,
+                    low_stock_count = EXCLUDED.low_stock_count,
+                    available_stock_value = EXCLUDED.available_stock_value,
+                    updated_at = NOW()
+                "#,
+        )
+        .bind(&hours)
+        .bind(&total_cars)
+        .bind(&total_values)
+        .bind(&active_reservations)
+        .bind(&reserved_units)
+        .bind(&low_stock_counts)
+        .bind(&available_stock_values)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }
 

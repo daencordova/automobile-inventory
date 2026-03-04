@@ -166,6 +166,67 @@ impl QueryCache {
             depreciation_size: self.depreciation.entry_count(),
         }
     }
+
+    pub async fn warm_dashboard_stats<F, Fut>(&self, fetch: F) -> crate::error::AppResult<()>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = crate::error::AppResult<DashboardStats>>,
+    {
+        tracing::info!("Warming dashboard stats cache");
+
+        match fetch().await {
+            Ok(stats) => {
+                self.dashboard_stats
+                    .insert("global".to_string(), stats)
+                    .await;
+                tracing::info!("Dashboard stats cache warmed successfully");
+                Ok(())
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to warm dashboard stats cache");
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn warm_car_by_id<F, Fut>(
+        &self,
+        car_id: &str,
+        fetch: F,
+    ) -> crate::error::AppResult<()>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = crate::error::AppResult<CarResponse>>,
+    {
+        tracing::debug!(car_id = %car_id, "Warming car cache");
+
+        match fetch().await {
+            Ok(car) => {
+                self.car_by_id.insert(car_id.to_string(), car).await;
+                Ok(())
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, car_id = %car_id, "Failed to warm car cache");
+                Err(e)
+            }
+        }
+    }
+
+    pub async fn get_if_fresh(&self, key: &str, _max_age_ms: u64) -> Option<DashboardStats> {
+        if let Some(stats) = self.dashboard_stats.get(key).await {
+            Some(stats)
+        } else {
+            None
+        }
+    }
+
+    pub async fn insert_dashboard_stats(&self, key: String, stats: DashboardStats) {
+        self.dashboard_stats.insert(key, stats).await;
+    }
+
+    pub fn dashboard_stats_ttl(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(30)
+    }
 }
 
 impl Default for QueryCache {

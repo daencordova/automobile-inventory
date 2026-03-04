@@ -1,4 +1,7 @@
+use bigdecimal::BigDecimal;
 use sqlx::PgPool;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 use tokio::time::{Duration, Instant, interval};
 
 #[derive(Debug, Clone)]
@@ -48,6 +51,7 @@ impl BatchConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct BackgroundWorker {
     pool: PgPool,
     interval_secs: u64,
@@ -142,8 +146,18 @@ impl BackgroundWorker {
         let mut total_batches: u64 = 0;
         let mut consecutive_errors: u32 = 0;
 
+        let semaphore = Arc::new(Semaphore::new(self.batch_config.max_concurrent_batches));
+        let mut handles: Vec<
+            tokio::task::JoinHandle<(Instant, Result<(usize, bool), crate::error::AppError>)>,
+        > = Vec::new();
+
+        let mut should_break = false;
+
         loop {
-            if *self.shutdown_rx.borrow() {
+            if *self.shutdown_rx.borrow() || should_break {
+                for handle in handles {
+                    let _ = handle.await;
+                }
                 tracing::info!(
                     processed = total_processed,
                     batches = total_batches,
@@ -152,71 +166,101 @@ impl BackgroundWorker {
                 break;
             }
 
-            let batch_start = Instant::now();
-            let batch_result = self.process_single_batch().await;
+            let mut i = 0;
+            while i < handles.len() {
+                if handles[i].is_finished() {
+                    let handle = handles.remove(i);
+                    match handle.await {
+                        Ok((batch_start, Ok((processed, has_more)))) => {
+                            consecutive_errors = 0;
+                            total_processed += processed as u64;
+                            total_batches += 1;
 
-            match batch_result {
-                Ok((processed, has_more)) => {
-                    consecutive_errors = 0;
-                    total_processed += processed as u64;
-                    total_batches += 1;
+                            let batch_duration: Duration = batch_start.elapsed();
+                            let throughput = if batch_duration.as_secs_f64() > 0.0 {
+                                processed as f64 / batch_duration.as_secs_f64()
+                            } else {
+                                0.0
+                            };
 
-                    let batch_duration = batch_start.elapsed();
+                            metrics::counter!("inventory_reservations_expired_total")
+                                .increment(processed as u64);
+                            metrics::gauge!("batch_processing_throughput").set(throughput);
 
-                    let throughput = if batch_duration.as_secs_f64() > 0.0 {
-                        processed as f64 / batch_duration.as_secs_f64()
-                    } else {
-                        0.0
-                    };
+                            tracing::info!(
+                                batch = total_batches,
+                                processed = processed,
+                                throughput_per_sec = format!("{:.2}", throughput),
+                                duration_ms = batch_duration.as_millis(),
+                                "Batch completed"
+                            );
 
-                    metrics::counter!("inventory_reservations_expired_total")
-                        .increment(processed as u64);
-                    metrics::gauge!("batch_processing_throughput").set(throughput);
-
-                    tracing::info!(
-                        batch = total_batches,
-                        processed = processed,
-                        throughput_per_sec = format!("{:.2}", throughput),
-                        duration_ms = batch_duration.as_millis(),
-                        "Batch completed"
-                    );
-
-                    if !has_more {
-                        tracing::info!(
-                            total_processed = total_processed,
-                            total_batches = total_batches,
-                            "No more expired reservations to process"
-                        );
-                        break;
+                            if !has_more {
+                                should_break = true;
+                            }
+                        }
+                        Ok((_, Err(e))) => {
+                            consecutive_errors += 1;
+                            tracing::error!(
+                                error = %e,
+                                consecutive_errors = consecutive_errors,
+                                "Batch processing error"
+                            );
+                            metrics::counter!("batch_processing_errors_total").increment(1);
+                        }
+                        Err(e) => {
+                            consecutive_errors += 1;
+                            tracing::error!(error = %e, "Batch panicked");
+                            metrics::counter!("batch_processing_errors_total").increment(1);
+                        }
                     }
-
-                    if total_batches.is_multiple_of(self.batch_config.commit_interval_secs) {
-                        tracing::debug!("Commit interval reached, yielding to other tasks");
-                        tokio::task::yield_now().await;
-                    }
-                }
-
-                Err(e) => {
-                    consecutive_errors += 1;
-                    tracing::error!(
-                        error = %e,
-                        consecutive_errors = consecutive_errors,
-                        "Batch processing error"
-                    );
-
-                    metrics::counter!("batch_processing_errors_total").increment(1);
-
-                    let backoff_factor = consecutive_errors.min(5);
-                    self.apply_backoff(backoff_factor).await;
-
-                    if consecutive_errors >= 5 {
-                        tracing::error!(
-                            "Too many consecutive errors, aborting batch processing cycle"
-                        );
-                        return Err(e);
-                    }
+                } else {
+                    i += 1;
                 }
             }
+
+            if should_break {
+                for handle in handles {
+                    let _ = handle.await;
+                }
+                break;
+            }
+
+            if consecutive_errors >= 5 {
+                tracing::error!("Too many consecutive errors, aborting batch processing cycle");
+                return Err(crate::error::AppError::ServiceUnavailable);
+            }
+
+            if handles.len() >= self.batch_config.max_concurrent_batches {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                continue;
+            }
+
+            let batch_start: Instant = Instant::now();
+            let this = self.clone();
+            let permit = match semaphore.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                }
+            };
+
+            let handle: tokio::task::JoinHandle<(
+                Instant,
+                Result<(usize, bool), crate::error::AppError>,
+            )> = tokio::spawn(async move {
+                let _permit = permit;
+                let result = this.process_single_batch().await.map_err(|e| {
+                    crate::error::AppError::DatabaseError(sqlx::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    )))
+                });
+                (batch_start, result)
+            });
+
+            handles.push(handle);
         }
 
         let total_duration = start.elapsed();
@@ -250,7 +294,7 @@ impl BackgroundWorker {
                     SELECT id, car_id, quantity
                     FROM reservations
                     WHERE status = 'Pending'
-                        AND expires_at < NOW()
+                      AND expires_at < NOW()
                     ORDER BY expires_at ASC
                     LIMIT $1
                     FOR UPDATE SKIP LOCKED
@@ -268,7 +312,7 @@ impl BackgroundWorker {
                         quantity_in_stock = quantity_in_stock + ur.quantity,
                         status = CASE
                             WHEN c.status = 'Reserved'
-                                    AND c.quantity_in_stock + ur.quantity > 0
+                                 AND c.quantity_in_stock + ur.quantity > 0
                             THEN 'Available'
                             ELSE c.status
                         END,
@@ -281,8 +325,8 @@ impl BackgroundWorker {
                     SELECT COUNT(*) as remaining
                     FROM reservations
                     WHERE status = 'Pending'
-                        AND expires_at < NOW()
-                        AND id NOT IN (SELECT id FROM update_reservations)
+                      AND expires_at < NOW()
+                      AND id NOT IN (SELECT id FROM update_reservations)
                 )
                 SELECT
                     COUNT(*) as processed_count,
@@ -306,7 +350,10 @@ impl BackgroundWorker {
                 Err(crate::error::AppError::DatabaseError(e))
             }
             Err(_) => {
-                tracing::error!("Batch transaction timeout (>10s)");
+                tracing::error!(
+                    "Batch transaction timeout (>{}s)",
+                    self.batch_config.query_timeout_secs
+                );
                 Err(crate::error::AppError::ServiceUnavailable)
             }
         }
@@ -329,8 +376,39 @@ impl BackgroundWorker {
         tokio::time::sleep(Duration::from_millis(delay_ms)).await;
     }
 
-    async fn update_inventory_metrics(&self) -> Result<(), crate::error::AppError> {
-        let start = Instant::now();
+    async fn upsert_inventory_metrics_batch(
+        &self,
+        metrics: Vec<(
+            chrono::DateTime<chrono::Utc>,
+            i64,
+            BigDecimal,
+            i64,
+            i64,
+            i64,
+            BigDecimal,
+        )>,
+    ) -> Result<(), sqlx::Error> {
+        if metrics.is_empty() {
+            return Ok(());
+        }
+
+        let mut hours = Vec::with_capacity(metrics.len());
+        let mut total_cars = Vec::with_capacity(metrics.len());
+        let mut total_values = Vec::with_capacity(metrics.len());
+        let mut active_reservations = Vec::with_capacity(metrics.len());
+        let mut reserved_units = Vec::with_capacity(metrics.len());
+        let mut low_stock_counts = Vec::with_capacity(metrics.len());
+        let mut available_stock_values = Vec::with_capacity(metrics.len());
+
+        for (hour, cars, value, reservations, reserved, low_stock, available_value) in metrics {
+            hours.push(hour);
+            total_cars.push(cars);
+            total_values.push(value);
+            active_reservations.push(reservations);
+            reserved_units.push(reserved);
+            low_stock_counts.push(low_stock);
+            available_stock_values.push(available_value);
+        }
 
         sqlx::query(
             r#"
@@ -338,23 +416,15 @@ impl BackgroundWorker {
                 metric_hour, total_cars, total_value, active_reservations,
                 reserved_units, low_stock_count, available_stock_value
             )
-            SELECT
-                DATE_TRUNC('hour', NOW()),
-                COUNT(DISTINCT c.car_id),
-                COALESCE(SUM(c.price * c.quantity_in_stock), 0),
-                COUNT(DISTINCT r.id) FILTER (WHERE r.status = 'Pending' AND r.expires_at > NOW()),
-                COALESCE(SUM(r.quantity) FILTER (WHERE r.status = 'Pending' AND r.expires_at > NOW()), 0),
-                COUNT(DISTINCT c.car_id) FILTER (WHERE c.quantity_in_stock <= c.reorder_point),
-                COALESCE(SUM(
-                    c.price * (c.quantity_in_stock - COALESCE((
-                        SELECT SUM(r2.quantity)
-                        FROM reservations r2
-                        WHERE r2.car_id = c.car_id AND r2.status = 'Pending' AND r2.expires_at > NOW()
-                    ), 0))
-                ), 0)
-            FROM cars c
-            LEFT JOIN reservations r ON c.car_id = r.car_id
-            WHERE c.deleted_at IS NULL
+            SELECT * FROM UNNEST(
+                $1::timestamptz[],
+                $2::bigint[],
+                $3::numeric[],
+                $4::bigint[],
+                $5::bigint[],
+                $6::bigint[],
+                $7::numeric[]
+            )
             ON CONFLICT (metric_hour) DO UPDATE SET
                 total_cars = EXCLUDED.total_cars,
                 total_value = EXCLUDED.total_value,
@@ -363,11 +433,62 @@ impl BackgroundWorker {
                 low_stock_count = EXCLUDED.low_stock_count,
                 available_stock_value = EXCLUDED.available_stock_value,
                 updated_at = NOW()
+            "#,
+        )
+        .bind(&hours)
+        .bind(&total_cars)
+        .bind(&total_values)
+        .bind(&active_reservations)
+        .bind(&reserved_units)
+        .bind(&low_stock_counts)
+        .bind(&available_stock_values)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn update_inventory_metrics(&self) -> Result<(), crate::error::AppError> {
+        let start = Instant::now();
+
+        let hour = chrono::Utc::now();
+        let row: (i64, Option<BigDecimal>, i64, i64, i64, Option<BigDecimal>) = sqlx::query_as(
+            r#"
+            SELECT
+                COUNT(DISTINCT c.car_id),
+                COALESCE(SUM(c.price * c.quantity_in_stock), 0),
+                COUNT(DISTINCT r.id) FILTER (WHERE r.status = 'Pending' AND r.expires_at > NOW()),
+                COALESCE(SUM(r.quantity) FILTER (WHERE r.status = 'Pending' AND r.expires_at > NOW()), 0),
+                COUNT(DISTINCT c.car_id) FILTER (WHERE c.quantity_in_stock <= c.reorder_point),
+                COALESCE(SUM(
+                    c.price * GREATEST(c.quantity_in_stock - COALESCE((
+                        SELECT SUM(r2.quantity)
+                        FROM reservations r2
+                        WHERE r2.car_id = c.car_id AND r2.status = 'Pending' AND r2.expires_at > NOW()
+                    ), 0), 0)
+                ), 0)
+            FROM cars c
+            LEFT JOIN reservations r ON c.car_id = r.car_id
+            WHERE c.deleted_at IS NULL
             "#
         )
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await
         .map_err(crate::error::AppError::DatabaseError)?;
+
+        let metrics = vec![(
+            hour,
+            row.0,
+            row.1.unwrap_or_else(|| BigDecimal::from(0)),
+            row.2,
+            row.3,
+            row.4,
+            row.5.unwrap_or_else(|| BigDecimal::from(0)),
+        )];
+
+        self.upsert_inventory_metrics_batch(metrics)
+            .await
+            .map_err(crate::error::AppError::DatabaseError)?;
 
         let elapsed = start.elapsed();
         tracing::debug!(
