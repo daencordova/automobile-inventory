@@ -1,36 +1,44 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
-CREATE DOMAIN warehouse_id AS VARCHAR(20);
+CREATE DOMAIN domain_car_id AS VARCHAR(10) CHECK (VALUE ~ '^C[0-9]{4,}$');
+CREATE DOMAIN domain_warehouse_id AS VARCHAR(20) CHECK (VALUE ~ '^W[0-9]{3,}$');
+CREATE DOMAIN domain_customer_id AS VARCHAR(10) CHECK (VALUE ~ '^CU[0-9]{4,}$');
+CREATE DOMAIN domain_sale_id AS VARCHAR(10) CHECK (VALUE ~ '^S[0-9]{5,}$');
+CREATE DOMAIN domain_email AS VARCHAR(255) CHECK (VALUE ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$');
+CREATE DOMAIN domain_phone AS VARCHAR(20) CHECK (VALUE ~ '^[0-9\-\+\(\)\s]{7,20}$');
 
-CREATE TYPE car_status AS ENUM ('Available', 'Sold', 'Reserved', 'Maintenance');
-CREATE TYPE engine_type AS ENUM ('Electric', 'Hybrid', 'Gasoline', 'Diesel', 'Petrol');
-
-CREATE TYPE reservation_status AS ENUM ('Pending', 'Confirmed', 'Expired', 'Cancelled', 'Completed');
-
-CREATE TYPE transfer_status AS ENUM ('Pending', 'InTransit', 'Completed', 'Cancelled');
-
-CREATE TYPE alert_level AS ENUM ('Critical', 'Warning', 'Ok');
-
-CREATE TYPE job_status AS ENUM ('Running', 'Completed', 'Failed');
+CREATE TYPE enum_car_status AS ENUM ('Available', 'Sold', 'Reserved', 'Maintenance', 'Discontinued');
+CREATE TYPE enum_engine_type AS ENUM ('Electric', 'Hybrid', 'Gasoline', 'Diesel', 'Petrol', 'Hydrogen');
+CREATE TYPE enum_transmission AS ENUM ('Manual', 'Automatic', 'CVT', 'Semi-Automatic');
+CREATE TYPE enum_reservation_status AS ENUM ('Pending', 'Confirmed', 'Expired', 'Cancelled', 'Completed');
+CREATE TYPE enum_transfer_status AS ENUM ('Pending', 'InTransit', 'Completed', 'Cancelled', 'Failed');
+CREATE TYPE enum_alert_level AS ENUM ('Critical', 'Warning', 'Ok', 'Info');
+CREATE TYPE enum_job_status AS ENUM ('Running', 'Completed', 'Failed', 'Cancelled', 'Scheduled');
+CREATE TYPE enum_payment_method AS ENUM ('Cash', 'Credit', 'Installment', 'BankTransfer', 'Crypto');
+CREATE TYPE enum_gender AS ENUM ('Male', 'Female', 'NonBinary', 'PreferNotToSay');
 
 CREATE TABLE IF NOT EXISTS cars (
-    car_id VARCHAR(10) PRIMARY KEY,
+    car_id domain_car_id PRIMARY KEY,
     brand VARCHAR(50) NOT NULL,
     model VARCHAR(100) NOT NULL,
-    year INT NOT NULL CONSTRAINT check_year CHECK (year >= 1886 AND year <= EXTRACT(YEAR FROM CURRENT_DATE) + 1),
+    year INT NOT NULL CONSTRAINT check_car_year CHECK (year >= 1886 AND year <= EXTRACT(YEAR FROM CURRENT_DATE) + 1),
     color VARCHAR(30),
-    engine_type engine_type NOT NULL,
-    transmission VARCHAR(20),
-    price DECIMAL(12, 2) NOT NULL CONSTRAINT check_price CHECK (price > 0),
-    quantity_in_stock INT DEFAULT 0 CONSTRAINT check_qty CHECK (quantity_in_stock >= 0),
-    reorder_point INTEGER DEFAULT 5 CHECK (reorder_point >= 0),
-    economic_order_qty INTEGER DEFAULT 10 CHECK (economic_order_qty > 0),
+    engine_type enum_engine_type NOT NULL DEFAULT 'Gasoline',
+    transmission enum_transmission NOT NULL DEFAULT 'Manual',
+    price DECIMAL(12, 2) NOT NULL CONSTRAINT check_car_price CHECK (price > 0),
+    cost_price DECIMAL(12, 2),
+    quantity_in_stock INT DEFAULT 0 CONSTRAINT check_car_qty CHECK (quantity_in_stock >= 0),
+    reorder_point INTEGER DEFAULT 5 CONSTRAINT check_reorder_point CHECK (reorder_point >= 0),
+    economic_order_qty INTEGER DEFAULT 10 CONSTRAINT check_eoq CHECK (economic_order_qty > 0),
     version BIGINT DEFAULT 1,
-    status car_status NOT NULL DEFAULT 'Available',
+    status enum_car_status NOT NULL DEFAULT 'Available',
     search_vector tsvector,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ DEFAULT NULL
+    deleted_at TIMESTAMPTZ DEFAULT NULL,
+    created_by VARCHAR(100),
+    updated_by VARCHAR(100)
 );
 
 CREATE TABLE reservations (
