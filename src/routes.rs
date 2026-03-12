@@ -161,6 +161,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/cars", car_routes())
         .nest("/reservations", reservation_routes())
         .nest("/warehouses", warehouse_routes())
+        .nest("/sales", sales_routes())
         .nest("/inventory", inventory_routes())
         .layer(inner_layers)
         .layer(GovernorLayer::new(governor_conf));
@@ -209,6 +210,18 @@ fn car_routes() -> Router<AppState> {
             get(handlers::get_depreciation_handler),
         )
         .route("/analytics/low-stock", get(handlers::get_low_stock_handler))
+}
+
+fn sales_routes() -> Router<AppState> {
+    Router::new()
+        .route("/", post(handlers::create_sale_handler))
+        .route("/", get(handlers::list_sales_handler))
+        .route("/{id}", get(handlers::get_sale_handler))
+        .route(
+            "/customer/{customer_id}",
+            get(handlers::get_customer_sales_handler),
+        )
+        .route("/car/{car_id}", get(handlers::get_car_sales_handler))
 }
 
 fn reservation_routes() -> Router<AppState> {

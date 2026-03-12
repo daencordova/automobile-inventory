@@ -13,10 +13,12 @@ use crate::config::DatabaseConfig;
 use crate::error::{AppError, AppResult, ReservationError};
 use crate::models::{
     AlertLevel, CarFilter, CarId, CarResponse, CarSearchQuery, CarSearchRequest, CarSearchResult,
-    CarStatus, CarUpdateData, CreateCarDto, CreateReservationDto, DashboardStats, HealthStatus,
-    InventoryAlertSummary, InventoryMetrics, InventoryStatusStat, PaginatedResponse,
-    ReservationResponse, ReservationStatus, SalesVelocity, StockAlert, StockTransferDto,
-    SystemHealth, TransferOrder, UpdateCarDto, ValidatedId, Warehouse, WarehouseId,
+    CarStatus, CarSummary, CarUpdateData, CreateCarDto, CreateReservationDto, CreateSaleDto,
+    CustomerSummary, DashboardStats, HealthStatus, InventoryAlertSummary, InventoryMetrics,
+    InventoryStatusStat, PaginatedResponse, PaginationParams, ReservationResponse,
+    ReservationStatus, Sale, SaleResponse, SaleSearchQuery, SalesAnalytics, SalesVelocity,
+    StockAlert, StockTransferDto, SystemHealth, TransferOrder, UpdateCarDto, ValidatedId,
+    Warehouse, WarehouseId,
 };
 use crate::repositories::{
     CarCommandRepository, CarQueryRepository, CarRepository, InventoryAnalyticsRepository,
@@ -768,4 +770,224 @@ pub struct SaleReceipt {
     pub car_id: CarId,
     pub quantity: i32,
     pub total_price: BigDecimal,
+}
+
+pub struct SalesService {
+    repo: Arc<dyn SalesRepository>,
+    car_repo: Arc<dyn CarRepository>,
+    warehouse_repo: Arc<dyn WarehouseRepository>,
+    uow_factory: Arc<dyn UnitOfWorkFactory>,
+}
+
+impl SalesService {
+    pub fn new(
+        repo: Arc<dyn SalesRepository>,
+        car_repo: Arc<dyn CarRepository>,
+        warehouse_repo: Arc<dyn WarehouseRepository>,
+        uow_factory: Arc<dyn UnitOfWorkFactory>,
+    ) -> Self {
+        Self {
+            repo,
+            car_repo,
+            warehouse_repo,
+            uow_factory,
+        }
+    }
+
+    #[instrument(skip(self))]
+    pub async fn process_sale(&self, dto: CreateSaleDto) -> AppResult<SaleResponse> {
+        if self.repo.exists(&dto.sale_id).await? {
+            return Err(AppError::AlreadyExists(format!(
+                "Sale with ID {} already exists",
+                dto.sale_id
+            )));
+        }
+
+        self.customer_repo
+            .find_by_id(&dto.customer_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound.with_context("Customer not found"))?;
+
+        let car_id = CarId::new(dto.car_id.clone())?;
+        let car = self
+            .car_repo
+            .find_by_id(car_id.clone())
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        if let Some(ref wh_id_str) = dto.warehouse_id {
+            let wh_id = WarehouseId::new(wh_id_str.clone())?;
+            self.warehouse_repo
+                .find_warehouse_by_id(&wh_id)
+                .await?
+                .ok_or_else(|| AppError::WarehouseNotFound(wh_id_str.clone()))?;
+        }
+
+        let mut uow = self.uow_factory.create_uow().await?;
+
+        let available_stock =
+            car.quantity_in_stock - self.get_reserved_quantity(&car_id).await? as i32;
+
+        if available_stock < dto.quantity {
+            return Err(AppError::InsufficientStock {
+                requested: dto.quantity as u32,
+                available: available_stock.max(0) as u32,
+            });
+        }
+
+        let sale = self
+            .repo
+            .create_in_uow(&mut uow, dto)
+            .await
+            .map_err(|e| AppError::from_db(e, "Sale"))?;
+
+        let new_stock = car.quantity_in_stock - sale.quantity;
+        let update_data = CarUpdateData {
+            brand: car.brand.clone(),
+            model: car.model.clone(),
+            year: car.year,
+            color: car.color.unwrap_or_default(),
+            engine_type: car.engine_type.clone(),
+            transmission: car.transmission.unwrap_or_default(),
+            price: car.price.clone(),
+            quantity_in_stock: new_stock,
+            status: if new_stock == 0 {
+                CarStatus::Sold
+            } else {
+                car.status.clone()
+            },
+        };
+
+        self.car_repo
+            .update_in_uow(&mut uow, &car_id, update_data)
+            .await
+            .map_err(AppError::DatabaseError)?;
+
+        uow.commit().await?;
+
+        info!(
+            sale_id = %sale.sale_id,
+            customer_id = %sale.customer_id,
+            car_id = %sale.car_id,
+            amount = %sale.sale_price * sale.quantity,
+            "Sale processed successfully"
+        );
+
+        self.to_response(sale).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn get_sale(&self, sale_id: String) -> AppResult<SaleResponse> {
+        let sale = self
+            .repo
+            .find_by_id(&sale_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        self.to_response(sale).await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn list_sales(
+        &self,
+        query: SaleSearchQuery,
+    ) -> AppResult<PaginatedResponse<SaleResponse>> {
+        let pagination = PaginationParams {
+            page: query.page,
+            page_size: query.page_size,
+        };
+        let (limit, offset, page, page_size) = pagination.normalize();
+
+        let (sales, total) = self.repo.find_all(&query, &pagination).await?;
+
+        let mut responses = Vec::with_capacity(sales.len());
+        for sale in sales {
+            responses.push(self.to_response(sale).await?);
+        }
+
+        Ok(PaginatedResponse::new(responses, total, page, page_size))
+    }
+
+    #[instrument(skip(self))]
+    pub async fn get_customer_history(&self, customer_id: String) -> AppResult<Vec<SaleResponse>> {
+        let customer = self
+            .customer_repo
+            .find_by_id(&customer_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        let sales = self.repo.find_by_customer(&customer_id, 100).await?;
+
+        let mut responses = Vec::with_capacity(sales.len());
+        for sale in sales {
+            responses.push(self.to_response(sale).await?);
+        }
+
+        Ok(responses)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn get_car_sales_history(&self, car_id: String) -> AppResult<Vec<SaleResponse>> {
+        let car_id = CarId::new(car_id)?;
+        let sales = self.repo.find_by_car(&car_id, 100).await?;
+
+        let mut responses = Vec::with_capacity(sales.len());
+        for sale in sales {
+            responses.push(self.to_response(sale).await?);
+        }
+
+        Ok(responses)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn get_sales_analytics(&self, days: i32) -> AppResult<SalesAnalytics> {
+        let end_date = Utc::now();
+        let start_date = end_date - chrono::Duration::days(days as i64);
+
+        self.repo
+            .get_analytics(start_date, end_date)
+            .await
+            .map_err(AppError::DatabaseError)
+    }
+
+    async fn get_reserved_quantity(&self, car_id: &CarId) -> AppResult<i64> {
+        Ok(0)
+    }
+
+    async fn to_response(&self, sale: Sale) -> AppResult<SaleResponse> {
+        let customer = self
+            .customer_repo
+            .find_by_id(&sale.customer_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        let car = self
+            .car_repo
+            .find_by_id(sale.car_id.clone())
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        let total = &sale.sale_price * sale.quantity;
+
+        Ok(SaleResponse {
+            sale_id: sale.sale_id,
+            customer: CustomerSummary {
+                customer_id: customer.customer_id,
+                name: customer.name,
+                email: customer.email,
+            },
+            car: CarSummary {
+                car_id: car.car_id.to_string(),
+                brand: car.brand,
+                model: car.model,
+            },
+            warehouse: sale.warehouse_id.map(|w| w.to_string()),
+            quantity: sale.quantity,
+            sale_price: sale.sale_price.to_string(),
+            total_amount: total.to_string(),
+            payment_method: format!("{:?}", sale.payment_method),
+            salesperson: sale.salesperson,
+            sold_at: sale.sold_at,
+        })
+    }
 }

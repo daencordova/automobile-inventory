@@ -12,9 +12,10 @@ use crate::extractors::ValidatedJson;
 use crate::middleware::extract_context;
 use crate::models::{
     Car, CarId, CarResponse, CarSearchQuery, CarSearchRequest, CarSearchResult, CarStatus,
-    CreateCarDto, CreateReservationDto, CreateWarehouseDto, DashboardStats, EngineType,
-    HealthResponse, HealthStatus, InventoryAlertSummary, InventoryMetrics, PaginatedResponse,
-    ReservationResponse, SalesVelocity, StockTransferDto, TransferOrder, UpdateCarDto, Warehouse,
+    CreateCarDto, CreateReservationDto, CreateSaleDto, CreateWarehouseDto, DashboardStats,
+    EngineType, HealthResponse, HealthStatus, InventoryAlertSummary, InventoryMetrics,
+    PaginatedResponse, PaymentMethod, ReservationResponse, SaleResponse, SaleSearchQuery,
+    SalesAnalytics, SalesVelocity, StockTransferDto, TransferOrder, UpdateCarDto, Warehouse,
     WarehouseId,
 };
 use crate::state::AppState;
@@ -693,4 +694,134 @@ pub async fn get_inventory_metrics_handler(
         .get_inventory_metrics()
         .await?;
     Ok(Json(metrics))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/sales",
+    request_body = CreateSaleDto,
+    responses(
+        (status = 201, description = "Sale created successfully", body = SaleResponse),
+        (status = 400, description = "Validation error"),
+        (status = 409, description = "Sale ID already exists or insufficient stock"),
+        (status = 404, description = "Customer, car or warehouse not found"),
+        (status = 422, description = "Insufficient stock")
+    ),
+    tag = "Sales"
+)]
+pub async fn create_sale_handler(
+    State(state): State<AppState>,
+    ValidatedJson(dto): ValidatedJson<CreateSaleDto>,
+) -> AppResult<impl IntoResponse> {
+    let sale = state.sales_service.process_sale(dto).await?;
+    Ok((StatusCode::CREATED, Json(sale)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/sales/{id}",
+    params(
+        ("id" = String, Path, description = "Sale ID (format: S#####)")
+    ),
+    responses(
+        (status = 200, description = "Sale found", body = SaleResponse),
+        (status = 404, description = "Sale not found")
+    ),
+    tag = "Sales"
+)]
+pub async fn get_sale_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let sale = state.sales_service.get_sale(id).await?;
+    Ok(Json(sale))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/sales",
+    params(
+        ("customer_id" = Option<String>, Query, description = "Filter by customer"),
+        ("car_id" = Option<String>, Query, description = "Filter by car"),
+        ("start_date" = Option<String>, Query, description = "Start date (ISO 8601)"),
+        ("end_date" = Option<String>, Query, description = "End date (ISO 8601)"),
+        ("payment_method" = Option<PaymentMethod>, Query, description = "Filter by payment method"),
+        ("salesperson" = Option<String>, Query, description = "Filter by salesperson"),
+        ("page" = Option<u32>, Query, description = "Page number"),
+        ("page_size" = Option<u32>, Query, description = "Items per page")
+    ),
+    responses(
+        (status = 200, description = "List of sales", body = PaginatedResponse<SaleResponse>),
+    ),
+    tag = "Sales"
+)]
+pub async fn list_sales_handler(
+    State(state): State<AppState>,
+    Query(query): Query<SaleSearchQuery>,
+) -> AppResult<impl IntoResponse> {
+    let sales = state.sales_service.list_sales(query).await?;
+    Ok(Json(sales))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/sales/customer/{customer_id}",
+    params(
+        ("customer_id" = String, Path, description = "Customer ID")
+    ),
+    responses(
+        (status = 200, description = "Customer purchase history", body = Vec<SaleResponse>),
+        (status = 404, description = "Customer not found")
+    ),
+    tag = "Sales"
+)]
+pub async fn get_customer_sales_handler(
+    State(state): State<AppState>,
+    Path(customer_id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let sales = state
+        .sales_service
+        .get_customer_history(customer_id)
+        .await?;
+    Ok(Json(sales))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/sales/car/{car_id}",
+    params(
+        ("car_id" = String, Path, description = "Car ID")
+    ),
+    responses(
+        (status = 200, description = "Car sales history", body = Vec<SaleResponse>),
+        (status = 404, description = "Car not found")
+    ),
+    tag = "Sales"
+)]
+pub async fn get_car_sales_handler(
+    State(state): State<AppState>,
+    Path(car_id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let sales = state.sales_service.get_car_sales_history(car_id).await?;
+    Ok(Json(sales))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/sales",
+    params(
+        ("days" = Option<i32>, Query, description = "Analysis period in days (default 30)")
+    ),
+    responses(
+        (status = 200, description = "Sales analytics", body = SalesAnalytics),
+    ),
+    tag = "Analytics"
+)]
+pub async fn get_sales_analytics_handler(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, i32>>,
+) -> AppResult<impl IntoResponse> {
+    let days = params.get("days").copied().unwrap_or(30);
+    let analytics = state.sales_service.get_sales_analytics(days).await?;
+    Ok(Json(analytics))
 }

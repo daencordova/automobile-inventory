@@ -5,7 +5,8 @@ use crate::circuit_breaker::CircuitBreaker;
 use crate::config::AppConfig;
 use crate::pool_manager::PoolManager;
 use crate::services::{
-    CarService, HealthCheckService, InventoryAnalyticsService, ReservationService, WarehouseService,
+    CarService, CustomerService, HealthCheckService, InventoryAnalyticsService, ReservationService,
+    SaleService, WarehouseService,
 };
 
 #[derive(Clone)]
@@ -15,6 +16,8 @@ pub struct AppState {
     pub reservation_service: Arc<ReservationService>,
     pub warehouse_service: Arc<WarehouseService>,
     pub inventory_analytics_service: Arc<InventoryAnalyticsService>,
+    pub customer_service: Arc<CustomerService>,
+    pub sale_service: Arc<SaleService>,
     pub config: AppConfig,
     pub start_time: Instant,
     pub db_circuit_breaker: Arc<CircuitBreaker>,

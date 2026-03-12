@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bigdecimal::{BigDecimal, FromPrimitive};
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, QueryBuilder, Result as SqlxResult};
 use tracing::error;
 use uuid::Uuid;
@@ -7,11 +8,11 @@ use uuid::Uuid;
 use crate::error::{ReservationError, TransferError};
 use crate::models::{
     CarEntity, CarFilter, CarId, CarSearchRequest, CarUpdateData, CreateCarDto,
-    CreateReservationDto, InventoryMetrics, InventoryStatusStat, PaginationParams, Reservation,
-    SalesVelocity, StockAlertRow, StockLocation, TransferOrder, TransferStatus, Warehouse,
-    WarehouseId,
+    CreateReservationDto, CreateSaleDto, DailySale, InventoryMetrics, InventoryStatusStat,
+    PaginationParams, PaymentMethod, PaymentMethodStat, Reservation, Sale, SaleSearchQuery,
+    SalesAnalytics, SalesVelocity, SalespersonStat, StockAlertRow, StockLocation, TransferOrder,
+    TransferStatus, Warehouse, WarehouseId,
 };
-
 use crate::uow::UnitOfWork;
 
 #[async_trait]
@@ -1675,7 +1676,7 @@ impl InventoryAnalyticsRepository for PgInventoryAnalyticsRepository {
                     COALESCE(AVG(quantity), 0) AS avg_daily_sales,
                     COALESCE(STDDEV(quantity), 0) AS sales_volatility,
                     COUNT(*) AS total_sales
-                FROM sales_history
+                FROM sales
                 WHERE sold_at > NOW() - INTERVAL '30 days'
                 GROUP BY car_id
             ),
@@ -1746,7 +1747,7 @@ impl InventoryAnalyticsRepository for PgInventoryAnalyticsRepository {
                     ELSE 'DOWN'
                 END AS trend_direction
             FROM cars c
-            LEFT JOIN sales_history s ON c.car_id = s.car_id
+            LEFT JOIN sales s ON c.car_id = s.car_id
                 AND s.sold_at > NOW() - INTERVAL '30 days'
             WHERE c.deleted_at IS NULL
             GROUP BY c.car_id, c.brand, c.model
@@ -1863,6 +1864,36 @@ impl InventoryAnalyticsRepository for PgInventoryAnalyticsRepository {
 
 #[async_trait]
 pub trait SalesRepository: Send + Sync {
+    async fn create_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        dto: CreateSaleDto,
+    ) -> Result<Sale, sqlx::Error>;
+
+    async fn find_by_id(&self, sale_id: &str) -> Result<Option<Sale>, sqlx::Error>;
+
+    async fn find_all(
+        &self,
+        query: &SaleSearchQuery,
+        pagination: &PaginationParams,
+    ) -> Result<(Vec<Sale>, i64), sqlx::Error>;
+
+    async fn find_by_customer(
+        &self,
+        customer_id: &str,
+        limit: i64,
+    ) -> Result<Vec<Sale>, sqlx::Error>;
+
+    async fn find_by_car(&self, car_id: &CarId, limit: i64) -> Result<Vec<Sale>, sqlx::Error>;
+
+    async fn get_analytics(
+        &self,
+        start_date: DateTime<Utc>,
+        end_date: DateTime<Utc>,
+    ) -> Result<SalesAnalytics, sqlx::Error>;
+
+    async fn exists(&self, sale_id: &str) -> Result<bool, sqlx::Error>;
+
     async fn record_sale_in_uow(
         &self,
         uow: &mut UnitOfWork<'_>,
@@ -1873,10 +1904,358 @@ pub trait SalesRepository: Send + Sync {
     ) -> SqlxResult<Uuid>;
 }
 
-pub struct PgSalesRepository;
+pub struct PgSalesRepository {
+    pool: PgPool,
+}
+
+impl PgSalesRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
 
 #[async_trait]
 impl SalesRepository for PgSalesRepository {
+    async fn create_in_uow(
+        &self,
+        uow: &mut UnitOfWork<'_>,
+        dto: CreateSaleDto,
+    ) -> Result<Sale, sqlx::Error> {
+        let sold_at = dto.sold_at.unwrap_or_else(Utc::now);
+
+        sqlx::query_as::<_, Sale>(
+            r#"
+            INSERT INTO sales (
+                sale_id,
+                customer_id,
+                car_id,
+                warehouse_id,
+                quantity,
+                sale_price,
+                payment_method,
+                salesperson,
+                sold_at,
+                metadata,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+            RETURNING
+                sale_id,
+                customer_id,
+                car_id as "car_id: CarId",
+                warehouse_id as "warehouse_id: WarehouseId",
+                quantity,
+                sale_price,
+                payment_method as "payment_method: PaymentMethod",
+                salesperson,
+                sold_at,
+                metadata,
+                created_at,
+                updated_at
+            "#,
+        )
+        .bind(&dto.sale_id)
+        .bind(&dto.customer_id)
+        .bind(&dto.car_id)
+        .bind(dto.warehouse_id.as_ref())
+        .bind(dto.quantity)
+        .bind(&dto.sale_price)
+        .bind(&dto.payment_method)
+        .bind(&dto.salesperson)
+        .bind(sold_at)
+        .bind(&dto.metadata)
+        .fetch_one(uow.connection())
+        .await
+    }
+
+    async fn find_by_id(&self, sale_id: &str) -> Result<Option<Sale>, sqlx::Error> {
+        sqlx::query_as::<_, Sale>(
+            r#"
+            SELECT
+                sale_id,
+                customer_id,
+                car_id as "car_id: CarId",
+                warehouse_id as "warehouse_id: WarehouseId",
+                quantity,
+                sale_price,
+                payment_method as "payment_method: PaymentMethod",
+                salesperson,
+                sold_at,
+                metadata,
+                created_at,
+                updated_at
+            FROM sales
+            WHERE sale_id = $1
+            "#,
+        )
+        .bind(sale_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    async fn find_all(
+        &self,
+        query: &SaleSearchQuery,
+        pagination: &PaginationParams,
+    ) -> Result<(Vec<Sale>, i64), sqlx::Error> {
+        let (limit, offset, _, _) = pagination.normalize();
+
+        let mut builder = QueryBuilder::new(
+            r#"
+            SELECT
+                sale_id,
+                customer_id,
+                car_id as "car_id: CarId",
+                warehouse_id as "warehouse_id: WarehouseId",
+                quantity,
+                sale_price,
+                payment_method as "payment_method: PaymentMethod",
+                salesperson,
+                sold_at,
+                metadata,
+                created_at,
+                updated_at,
+                COUNT(*) OVER() as total_count
+            FROM sales
+            WHERE 1=1
+            "#,
+        );
+
+        if let Some(customer_id) = &query.customer_id {
+            builder.push(" AND customer_id = ");
+            builder.push_bind(customer_id);
+        }
+
+        if let Some(car_id) = &query.car_id {
+            builder.push(" AND car_id = ");
+            builder.push_bind(car_id);
+        }
+
+        if let Some(start) = query.start_date {
+            builder.push(" AND sold_at >= ");
+            builder.push_bind(start);
+        }
+
+        if let Some(end) = query.end_date {
+            builder.push(" AND sold_at <= ");
+            builder.push_bind(end);
+        }
+
+        if let Some(method) = &query.payment_method {
+            builder.push(" AND payment_method = ");
+            builder.push_bind(method);
+        }
+
+        if let Some(salesperson) = &query.salesperson {
+            builder.push(" AND salesperson ILIKE ");
+            builder.push_bind(format!("%{}%", salesperson));
+        }
+
+        builder.push(" ORDER BY sold_at DESC LIMIT ");
+        builder.push_bind(limit);
+        builder.push(" OFFSET ");
+        builder.push_bind(offset);
+
+        #[derive(sqlx::FromRow)]
+        struct SaleRow {
+            #[sqlx(flatten)]
+            sale: Sale,
+            total_count: i64,
+        }
+
+        let rows = builder
+            .build_query_as::<SaleRow>()
+            .fetch_all(&self.pool)
+            .await?;
+
+        let total = rows.first().map(|r| r.total_count).unwrap_or(0);
+        let sales = rows.into_iter().map(|r| r.sale).collect();
+
+        Ok((sales, total))
+    }
+
+    async fn find_by_customer(
+        &self,
+        customer_id: &str,
+        limit: i64,
+    ) -> Result<Vec<Sale>, sqlx::Error> {
+        sqlx::query_as::<_, Sale>(
+            r#"
+            SELECT
+                sale_id,
+                customer_id,
+                car_id as "car_id: CarId",
+                warehouse_id as "warehouse_id: WarehouseId",
+                quantity,
+                sale_price,
+                payment_method as "payment_method: PaymentMethod",
+                salesperson,
+                sold_at,
+                metadata,
+                created_at,
+                updated_at
+            FROM sales
+            WHERE customer_id = $1
+            ORDER BY sold_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(customer_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    async fn find_by_car(&self, car_id: &CarId, limit: i64) -> Result<Vec<Sale>, sqlx::Error> {
+        sqlx::query_as::<_, Sale>(
+            r#"
+            SELECT
+                sale_id,
+                customer_id,
+                car_id as "car_id: CarId",
+                warehouse_id as "warehouse_id: WarehouseId",
+                quantity,
+                sale_price,
+                payment_method as "payment_method: PaymentMethod",
+                salesperson,
+                sold_at,
+                metadata,
+                created_at,
+                updated_at
+            FROM sales
+            WHERE car_id = $1
+            ORDER BY sold_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(car_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    async fn get_analytics(
+        &self,
+        start_date: DateTime<Utc>,
+        end_date: DateTime<Utc>,
+    ) -> Result<SalesAnalytics, sqlx::Error> {
+        let (total_sales, total_revenue, total_units): (i64, Option<BigDecimal>, i64) =
+            sqlx::query_as(
+                r#"
+                SELECT
+                    COUNT(*),
+                    SUM(sale_price * quantity),
+                    SUM(quantity)
+                FROM sales
+                WHERE sold_at BETWEEN $1 AND $2
+                "#,
+            )
+            .bind(start_date)
+            .bind(end_date)
+            .fetch_one(&self.pool)
+            .await?;
+
+        let payment_stats: Vec<(PaymentMethod, i64, Option<BigDecimal>)> = sqlx::query_as(
+            r#"
+            SELECT
+                payment_method as "payment_method: PaymentMethod",
+                COUNT(*),
+                SUM(sale_price * quantity)
+            FROM sales
+            WHERE sold_at BETWEEN $1 AND $2
+            GROUP BY payment_method
+            "#,
+        )
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let sales_by_payment_method = payment_stats
+            .into_iter()
+            .map(|(method, count, amount)| PaymentMethodStat {
+                method,
+                count,
+                total_amount: amount.unwrap_or_else(|| BigDecimal::from(0)).to_string(),
+            })
+            .collect();
+
+        let top_salespeople: Vec<(String, i64, Option<BigDecimal>)> = sqlx::query_as(
+            r#"
+            SELECT
+                salesperson,
+                COUNT(*),
+                SUM(sale_price * quantity)
+            FROM sales
+            WHERE sold_at BETWEEN $1 AND $2
+            GROUP BY salesperson
+            ORDER BY 3 DESC
+            LIMIT 10
+            "#,
+        )
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let top_salespeople = top_salespeople
+            .into_iter()
+            .map(|(name, count, amount)| SalespersonStat {
+                name,
+                sales_count: count,
+                total_revenue: amount.unwrap_or_else(|| BigDecimal::from(0)).to_string(),
+            })
+            .collect();
+
+        let daily_sales: Vec<(DateTime<Utc>, i64, Option<BigDecimal>)> = sqlx::query_as(
+            r#"
+            SELECT
+                DATE(sold_at) as date,
+                COUNT(*),
+                SUM(sale_price * quantity)
+            FROM sales
+            WHERE sold_at BETWEEN $1 AND $2
+            GROUP BY DATE(sold_at)
+            ORDER BY date
+            "#,
+        )
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let daily_sales_trend = daily_sales
+            .into_iter()
+            .map(|(date, count, amount)| DailySale {
+                date: date.format("%Y-%m-%d").to_string(),
+                count,
+                revenue: amount.unwrap_or_else(|| BigDecimal::from(0)).to_string(),
+            })
+            .collect();
+
+        Ok(SalesAnalytics {
+            total_sales,
+            total_revenue: total_revenue
+                .unwrap_or_else(|| BigDecimal::from(0))
+                .to_string(),
+            total_units_sold: total_units,
+            sales_by_payment_method,
+            top_salespeople,
+            daily_sales_trend,
+        })
+    }
+
+    async fn exists(&self, sale_id: &str) -> Result<bool, sqlx::Error> {
+        let result: Option<(bool,)> =
+            sqlx::query_as("SELECT EXISTS(SELECT 1 FROM sales WHERE sale_id = $1)")
+                .bind(sale_id)
+                .fetch_optional(&self.pool)
+                .await?;
+
+        Ok(result.map(|r| r.0).unwrap_or(false))
+    }
+
     async fn record_sale_in_uow(
         &self,
         uow: &mut UnitOfWork<'_>,
@@ -1889,7 +2268,7 @@ impl SalesRepository for PgSalesRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO sales_history (
+            INSERT INTO sales (
                 id,
                 car_id,
                 quantity,
@@ -1909,5 +2288,190 @@ impl SalesRepository for PgSalesRepository {
         .await?;
 
         Ok(sale_id)
+    }
+}
+
+#[async_trait]
+pub trait CustomerRepository: Send + Sync {
+    async fn create(&self, dto: CreateCustomerDto) -> Result<Customer, sqlx::Error>;
+    async fn find_by_id(&self, id: &CustomerId) -> Result<Option<Customer>, sqlx::Error>;
+    async fn find_all(
+        &self,
+        filter: &SaleFilter,
+        pagination: &PaginationParams,
+    ) -> Result<(Vec<Customer>, i64), sqlx::Error>;
+    async fn update(
+        &self,
+        id: &CustomerId,
+        dto: UpdateCustomerDto,
+    ) -> Result<Customer, sqlx::Error>;
+    async fn soft_delete(&self, id: &CustomerId) -> Result<(), sqlx::Error>;
+    async fn find_by_email(&self, email: &str) -> Result<Option<Customer>, sqlx::Error>;
+}
+
+pub struct PgCustomerRepository {
+    pool: PgPool,
+}
+
+impl PgCustomerRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl CustomerRepository for PgCustomerRepository {
+    async fn create(&self, dto: CreateCustomerDto) -> Result<Customer, sqlx::Error> {
+        sqlx::query_as::<_, Customer>(
+            r#"
+            INSERT INTO customers (
+                customer_id, name, gender, age, phone, email, city, is_active
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+            RETURNING
+                customer_id, name, gender, age, phone, email, city,
+                is_active, created_at, updated_at
+            "#,
+        )
+        .bind(&dto.customer_id)
+        .bind(&dto.name)
+        .bind(&dto.gender)
+        .bind(dto.age)
+        .bind(&dto.phone)
+        .bind(&dto.email)
+        .bind(&dto.city)
+        .fetch_one(&self.pool)
+        .await
+    }
+
+    async fn find_by_id(&self, id: &CustomerId) -> Result<Option<Customer>, sqlx::Error> {
+        sqlx::query_as::<_, Customer>(
+            r#"
+            SELECT
+                customer_id, name, gender, age, phone, email, city,
+                is_active, created_at, updated_at
+            FROM customers
+            WHERE customer_id = $1 AND is_active = true
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    async fn find_all(
+        &self,
+        filter: &SaleFilter,
+        pagination: &PaginationParams,
+    ) -> Result<(Vec<Customer>, i64), sqlx::Error> {
+        let (limit, offset, _, _) = pagination.normalize();
+
+        let mut builder = QueryBuilder::new(
+            r#"
+            SELECT
+                customer_id, name, gender, age, phone, email, city,
+                is_active, created_at, updated_at,
+                COUNT(*) OVER() AS total_count
+            FROM customers
+            WHERE is_active = true
+            "#,
+        );
+
+        if let Some(city) = &filter.customer_id {
+            builder.push(" AND city = ");
+            builder.push_bind(city);
+        }
+
+        builder.push(" ORDER BY created_at DESC LIMIT ");
+        builder.push_bind(limit);
+        builder.push(" OFFSET ");
+        builder.push_bind(offset);
+
+        #[derive(sqlx::FromRow)]
+        struct CustomerRow {
+            #[sqlx(flatten)]
+            customer: Customer,
+            total_count: i64,
+        }
+
+        let rows = builder
+            .build_query_as::<CustomerRow>()
+            .fetch_all(&self.pool)
+            .await?;
+
+        let total = rows.first().map(|r| r.total_count).unwrap_or(0);
+        let customers = rows.into_iter().map(|r| r.customer).collect();
+
+        Ok((customers, total))
+    }
+
+    async fn update(
+        &self,
+        id: &CustomerId,
+        dto: UpdateCustomerDto,
+    ) -> Result<Customer, sqlx::Error> {
+        let result = sqlx::query_as::<_, Customer>(
+            r#"
+            UPDATE customers
+            SET
+                name = COALESCE($1, name),
+                gender = COALESCE($2, gender),
+                age = COALESCE($3, age),
+                phone = COALESCE($4, phone),
+                email = COALESCE($5, email),
+                city = COALESCE($6, city),
+                is_active = COALESCE($7, is_active),
+                updated_at = NOW()
+            WHERE customer_id = $8 AND is_active = true
+            RETURNING
+                customer_id, name, gender, age, phone, email, city,
+                is_active, created_at, updated_at
+            "#,
+        )
+        .bind(dto.name)
+        .bind(dto.gender)
+        .bind(dto.age)
+        .bind(dto.phone)
+        .bind(dto.email)
+        .bind(dto.city)
+        .bind(dto.is_active)
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        result.ok_or(sqlx::Error::RowNotFound)
+    }
+
+    async fn soft_delete(&self, id: &CustomerId) -> Result<(), sqlx::Error> {
+        let result = sqlx::query(
+            r#"
+            UPDATE customers
+            SET is_active = false, updated_at = NOW()
+            WHERE customer_id = $1 AND is_active = true
+            "#,
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(sqlx::Error::RowNotFound);
+        }
+        Ok(())
+    }
+
+    async fn find_by_email(&self, email: &str) -> Result<Option<Customer>, sqlx::Error> {
+        sqlx::query_as::<_, Customer>(
+            r#"
+            SELECT
+                customer_id, name, gender, age, phone, email, city,
+                is_active, created_at, updated_at
+            FROM customers
+            WHERE email = $1 AND is_active = true
+            "#,
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await
     }
 }

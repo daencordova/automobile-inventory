@@ -163,12 +163,18 @@ async fn run_application(config: AppConfig) -> Result<(), AppError> {
 
     let car_query_repo = Arc::new(PgCarQueryRepository::new(pool.clone()));
     let car_command_repo = Arc::new(PgCarCommandRepository::new(pool.clone()));
-
+    let sales_repo = Arc::new(PgSalesRepository::new(pool.clone()));
     let reservation_repo = Arc::new(PgReservationRepository::new(pool.clone()));
     let warehouse_repo = Arc::new(PgWarehouseRepository::new(pool.clone()));
     let analytics_repo = Arc::new(PgInventoryAnalyticsRepository::new(pool.clone()));
 
     let car_service = CarService::new(car_query_repo, car_command_repo);
+    let sales_service = Arc::new(SalesService::new(
+        sales_repo,
+        car_command_repo.clone(),
+        warehouse_repo.clone(),
+        uow_factory,
+    ));
     let reservation_service = Arc::new(ReservationService::new(reservation_repo));
     let warehouse_service = Arc::new(WarehouseService::new(warehouse_repo));
     let inventory_analytics_service = Arc::new(InventoryAnalyticsService::new(analytics_repo));
@@ -182,6 +188,7 @@ async fn run_application(config: AppConfig) -> Result<(), AppError> {
         reservation_service,
         warehouse_service,
         inventory_analytics_service,
+        sales_service,
         config: config.clone(),
         start_time: std::time::Instant::now(),
         db_circuit_breaker,

@@ -881,3 +881,383 @@ pub struct InventoryAlertSummary {
     pub total_alerts: i64,
     pub alerts: Vec<StockAlert>,
 }
+
+#[derive(Debug, Clone, FromRow, Serialize, ToSchema)]
+pub struct Sale {
+    pub sale_id: SaleId,
+    pub customer_id: CustomerId,
+    pub car_id: CarId,
+    pub sale_date: DateTime<Utc>,
+    pub quantity: i32,
+    #[schema(value_type = String)]
+    pub sale_price: BigDecimal,
+    pub payment_method: PaymentMethod,
+    pub salesperson: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "payment_method")]
+pub enum PaymentMethod {
+    Cash,
+    Credit,
+    Installment,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq, sqlx::Type)]
+#[sqlx(transparent)]
+pub struct SaleId(String);
+
+impl SaleId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl ValidatedId for SaleId {
+    const PREFIX: char = 'S';
+    const MIN_LENGTH: usize = 6; // S00001
+
+    fn new(id: String) -> Result<Self, AppError> {
+        if !id.starts_with('S') || id.len() < 6 {
+            return Err(AppError::ConfigError(format!(
+                "Invalid SaleId format: {}. Must start with 'S' followed by digits",
+                id
+            )));
+        }
+        let suffix = &id[1..];
+        if !suffix.chars().all(|c| c.is_ascii_digit()) {
+            return Err(AppError::ConfigError(format!(
+                "Invalid SaleId format: {}. Must have digits after 'S'",
+                id
+            )));
+        }
+        Ok(Self(id))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SaleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<String> for SaleId {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value).map_err(|e| e.to_string())
+    }
+}
+
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct CreateSaleDto {
+    #[validate(length(min = 6, max = 20))]
+    pub sale_id: String,
+
+    #[validate(length(min = 6, max = 20))]
+    pub customer_id: String,
+
+    #[validate(length(min = 5, max = 20))]
+    pub car_id: String,
+
+    #[validate(range(min = 1))]
+    pub quantity: i32,
+
+    #[schema(value_type = f64, example = 29999.99)]
+    pub sale_price: BigDecimal,
+
+    pub payment_method: PaymentMethod,
+
+    #[validate(length(min = 2, max = 100))]
+    pub salesperson: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaleFilter {
+    pub customer_id: Option<String>,
+    pub car_id: Option<String>,
+    pub payment_method: Option<String>,
+    pub date_from: Option<DateTime<Utc>>,
+    pub date_to: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaleSearchQuery {
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+    pub customer_id: Option<String>,
+    pub car_id: Option<String>,
+    pub payment_method: Option<String>,
+}
+
+impl SaleSearchQuery {
+    pub fn pagination(&self) -> PaginationParams {
+        PaginationParams {
+            page: self.page,
+            page_size: self.page_size,
+        }
+    }
+
+    pub fn filter(&self) -> SaleFilter {
+        SaleFilter {
+            customer_id: self.customer_id.clone(),
+            car_id: self.car_id.clone(),
+            payment_method: self.payment_method.clone(),
+            date_from: None,
+            date_to: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SaleResponse {
+    pub sale_id: String,
+    pub customer_id: String,
+    pub customer_name: String,
+    pub car_id: String,
+    pub car_brand: String,
+    pub car_model: String,
+    pub sale_date: DateTime<Utc>,
+    pub quantity: i32,
+    pub sale_price: String,
+    pub total_amount: String,
+    pub payment_method: String,
+    pub salesperson: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SalesSummary {
+    pub total_sales: i64,
+    #[schema(value_type = String)]
+    pub total_revenue: BigDecimal,
+    pub total_cars_sold: i64,
+    pub sales_by_payment_method: Vec<PaymentMethodSummary>,
+    pub top_salespeople: Vec<SalespersonSummary>,
+    pub sales_by_month: Vec<MonthlySales>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PaymentMethodSummary {
+    pub payment_method: String,
+    pub count: i64,
+    #[schema(value_type = String)]
+    pub total_amount: BigDecimal,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SalespersonSummary {
+    pub salesperson: String,
+    pub sales_count: i64,
+    #[schema(value_type = String)]
+    pub total_revenue: BigDecimal,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MonthlySales {
+    pub year: i32,
+    pub month: i32,
+    pub sales_count: i64,
+    #[schema(value_type = String)]
+    pub total_revenue: BigDecimal,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CustomerSalesHistory {
+    pub customer: CustomerResponse,
+    pub total_purchases: i64,
+    #[schema(value_type = String)]
+    pub total_spent: BigDecimal,
+    pub purchases: Vec<SaleResponse>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, ToSchema)]
+pub struct Customer {
+    pub customer_id: CustomerId,
+    pub name: String,
+    pub gender: Gender,
+    pub age: i32,
+    pub phone: String,
+    pub email: String,
+    pub city: String,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq, sqlx::Type)]
+#[sqlx(transparent)]
+pub struct CustomerId(String);
+
+impl CustomerId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl ValidatedId for CustomerId {
+    const PREFIX: char = 'C';
+    const MIN_LENGTH: usize = 6;
+
+    fn new(id: String) -> Result<Self, AppError> {
+        if !id.starts_with("CU") || id.len() < 6 {
+            return Err(AppError::ConfigError(format!(
+                "Invalid CustomerId format: {}. Must start with 'CU' followed by digits",
+                id
+            )));
+        }
+        let suffix = &id[2..];
+        if !suffix.chars().all(|c| c.is_ascii_digit()) {
+            return Err(AppError::ConfigError(format!(
+                "Invalid CustomerId format: {}. Must have digits after 'CU'",
+                id
+            )));
+        }
+        Ok(Self(id))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for CustomerId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<String> for CustomerId {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value).map_err(|e| e.to_string())
+    }
+}
+
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct CreateCustomerDto {
+    #[validate(length(min = 6, max = 20))]
+    pub customer_id: String,
+
+    #[validate(length(min = 2, max = 100))]
+    pub name: String,
+
+    pub gender: Gender,
+
+    #[validate(range(min = 18, max = 120))]
+    pub age: i32,
+
+    #[validate(length(min = 5, max = 50))]
+    pub phone: String,
+
+    #[validate(email)]
+    pub email: String,
+
+    #[validate(length(min = 2, max = 100))]
+    pub city: String,
+}
+
+#[derive(Debug, Deserialize, Validate, ToSchema, Default)]
+pub struct UpdateCustomerDto {
+    #[validate(length(min = 2, max = 100))]
+    pub name: Option<String>,
+
+    pub gender: Option<Gender>,
+
+    #[validate(range(min = 18, max = 120))]
+    pub age: Option<i32>,
+
+    #[validate(length(min = 5, max = 50))]
+    pub phone: Option<String>,
+
+    #[validate(email)]
+    pub email: Option<String>,
+
+    #[validate(length(min = 2, max = 100))]
+    pub city: Option<String>,
+
+    pub is_active: Option<bool>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CustomerResponse {
+    pub customer_id: String,
+    pub name: String,
+    pub gender: String,
+    pub age: i32,
+    pub email: String,
+    pub city: String,
+    pub is_active: bool,
+}
+
+impl From<Customer> for CustomerResponse {
+    fn from(c: Customer) -> Self {
+        Self {
+            customer_id: c.customer_id.to_string(),
+            name: c.name,
+            gender: format!("{:?}", c.gender),
+            age: c.age,
+            email: c.email,
+            city: c.city,
+            is_active: c.is_active,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CustomerSummary {
+    pub customer_id: String,
+    pub name: String,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CarSummary {
+    pub car_id: String,
+    pub brand: String,
+    pub model: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SalesAnalytics {
+    pub total_sales: i64,
+    pub total_revenue: String,
+    pub total_units_sold: i64,
+    pub sales_by_payment_method: Vec<PaymentMethodStat>,
+    pub top_salespeople: Vec<SalespersonStat>,
+    pub daily_sales_trend: Vec<DailySale>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PaymentMethodStat {
+    pub method: PaymentMethod,
+    pub count: i64,
+    pub total_amount: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SalespersonStat {
+    pub name: String,
+    pub sales_count: i64,
+    pub total_revenue: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DailySale {
+    pub date: String,
+    pub count: i64,
+    pub revenue: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "gender")]
+pub enum Gender {
+    Male,
+    Female,
+    Other,
+}
